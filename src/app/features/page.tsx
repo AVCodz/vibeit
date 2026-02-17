@@ -8,6 +8,7 @@ import {
 } from "react-icons/si";
 import { HiPaperClip, HiLightBulb, HiMiniCursorArrowRays } from "react-icons/hi2";
 import { IoMdSend } from "react-icons/io";
+import Svg2 from "@/components/pixel-perfect/svg-2";
 import Image from "next/image";
 import type { Metadata } from "next";
 
@@ -33,6 +34,7 @@ const features = [
     title: "Full Codebase Export",
     description:
       "Download Clean, Well-Organized Project Files. Open In VS Code, Push To GitHub, Or Deploy Anywhere. The Code Is Yours.",
+    visual: "workflow",
   },
   {
     title: "Iterative Refinement",
@@ -49,6 +51,7 @@ const features = [
     title: "One-Click Deploy",
     description:
       "Go From Idea To Live Website In Minutes. Deploy Directly To Vercel, Netlify, Or Download The Project To Host Anywhere.",
+    visual: "deploy",
   },
 ];
 
@@ -60,6 +63,30 @@ function CornerDots() {
       <GoDotFill className="absolute z-10 bottom-1.5 left-1.5 size-3 text-muted-foreground" />
       <GoDotFill className="absolute z-10 bottom-1.5 right-1.5 size-3 text-muted-foreground" />
     </>
+  );
+}
+
+function WorkflowVisual() {
+  const steps = ["Generate", "Iterate", "Preview", "Export or Deploy"];
+  
+  return (
+    <div className="relative flex h-full w-full flex-col items-center justify-center overflow-hidden bg-background py-8">
+      <div className="flex flex-col gap-[-20px] scale-75 ">
+        {steps.map((step, i) => (
+          <div key={step} className="relative flex items-center gap-3 justify-start" style={{ marginTop: i === 0 ? 0 : "-60px", zIndex: steps.length - i }}>
+            <Svg2 className="h-28 shrink-0 w-44" />
+            <div className="">
+              <span className="text-xs font-medium uppercase tracking-widest text-muted-foreground/80 hover:text-foreground transition-colors">
+                {step}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+      
+      {/* Connecting Line */}
+      <div className="absolute left-1/2 top-10 bottom-10 w-px bg-gradient-to-b from-transparent via-border/50 to-transparent -translate-x-[50px] opacity-30" />
+    </div>
   );
 }
 
@@ -105,6 +132,30 @@ function PromptVisual() {
         {/* Cursor Icon */}
         <div className="absolute bottom-3 right-1 translate-x-1/2 translate-y-1/2 ">
              <HiMiniCursorArrowRays className="size-8 text-foreground" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeployVisual() {
+  return (
+    <div className="relative flex h-full w-full items-end justify-start overflow-hidden ">
+      {/* Outer box — lightish grey, cropped into the bottom-right corner */}
+      <div className="relative h-[75%] w-[85%] rounded-tr-xl bg-muted/30 border-t border-r border-border/40 p-2 pl-0 pb-0">
+        {/* Inner box — darker grey */}
+        <div className="relative h-full w-full rounded-tr-lg bg-neutral-950/10 border-t border-r border-border/30">
+          {/* Buttons row — top-right corner of inner box */}
+          <div className="absolute top-3 right-3 flex items-center gap-1.5">
+            <div className="flex h-9 items-center rounded-md border border-border/50 bg-muted/60 px-5 text-md font-medium text-muted-foreground">
+              Export
+            </div>
+            <div className="relative flex h-9 items-center rounded-md bg-foreground px-5 text-md font-medium text-background">
+              Deploy
+              {/* Cursor icon */}
+              <HiMiniCursorArrowRays className="absolute -bottom-4 -right-3 size-7 text-foreground" />
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -212,6 +263,8 @@ export default function FeaturesPage() {
               <div className="absolute inset-0 rounded-lg bg-background/40">
                 {feature.visual === "tech-stack" && <TechStackVisual />}
                 {feature.visual === "prompt" && <PromptVisual />}
+                {feature.visual === "workflow" && <WorkflowVisual />}
+                {feature.visual === "deploy" && <DeployVisual />}
               </div>
             </div>
 
