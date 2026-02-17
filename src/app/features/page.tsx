@@ -368,15 +368,15 @@ export default function FeaturesPage() {
   return (
     <div className="mx-auto w-full max-w-5xl py-16 px-6 sm:pb-24 pt-16">
       <div className="mb-12 text-center sm:mb-16">
-        <p className="mb-3 text-sm font-medium uppercase tracking-widest text-muted-foreground">
+        <p className="animate-fade-up mb-3 text-sm font-medium uppercase tracking-widest text-muted-foreground opacity-0 [animation-delay:200ms]">
           What VibeIt Can Do
         </p>
-        <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
+        <h1 className="animate-fade-up text-3xl font-bold tracking-tight opacity-0 [animation-delay:400ms] sm:text-4xl">
           Everything You Need to Go
           <br />
           From Idea to Production
         </h1>
-        <p className="mx-auto mt-4 max-w-2xl text-base text-muted-foreground">
+        <p className="animate-fade-up mx-auto mt-4 max-w-2xl text-base text-muted-foreground opacity-0 [animation-delay:600ms]">
           VibeIt handles the entire journey — from understanding your
           description to generating code, previewing it live, and deploying it
           to the web.
@@ -384,10 +384,11 @@ export default function FeaturesPage() {
       </div>
 
       <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-        {features.map((feature) => (
+        {features.map((feature, i) => (
           <div
             key={feature.title}
-            className="overflow-hidden rounded-xl border border-border/40 bg-card"
+            className="animate-fade-up overflow-hidden rounded-xl border border-border/40 bg-card opacity-0"
+            style={{ animationDelay: `${800 + i * 100}ms` }}
           >
             <div className="relative m-3 aspect-[4/3] rounded-lg border border-border/30 bg-background/60 overflow-hidden">
               <CornerDots />
