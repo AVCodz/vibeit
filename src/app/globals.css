@@ -131,6 +131,16 @@
   animation: fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
+@utility bg-noise {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.1' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.56'/%3E%3C/svg%3E");
+  background-size: 120px 120px;
+}
+
+@utility bg-noise-strong {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.4' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.9'/%3E%3C/svg%3E");
+  background-size: 72px 72px;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
