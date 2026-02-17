@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import Image from "next/image";
 
 const navLinks = [
   { href: "/features", label: "Features" },
@@ -17,7 +18,8 @@ export function Header() {
   return (
     <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/80 backdrop-blur-xl">
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6">
-        <Link href="/" className="text-lg font-bold tracking-tight">
+        <Link href="/" className="text-lg flex items-center font-bold tracking-tight">
+          <Image src="/logo.png" alt="VibeIt" width={30} height={30} />
           VibeIt
         </Link>
 
@@ -39,7 +41,7 @@ export function Header() {
         </nav>
 
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" asChild>
+          <Button variant="secondary" size="sm" asChild>
             <Link href="/auth?mode=signin">Sign In</Link>
           </Button>
           <Button size="sm" asChild>

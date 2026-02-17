@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { HiPaperClip, HiArrowUp, HiLightBulb } from "react-icons/hi2";
+import { IoSend } from "react-icons/io5";
 
 export default function Home() {
   const [planActive, setPlanActive] = useState(false);
@@ -27,20 +28,20 @@ export default function Home() {
         </p>
       </div>
 
-      <div className="mt-10 w-full max-w-2xl">
+      <div className="mt-10 w-full max-w-3xl">
         <div className="rounded-xl border border-border/50 bg-card p-4">
           <textarea
             placeholder="Describe the website you want to build..."
-            className="min-h-[100px] w-full resize-none bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+            className="min-h-[120px] w-full resize-none bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
             rows={4}
           />
-          <div className="flex items-center justify-between border-t border-border/40 pt-3">
+          <div className="flex items-center justify-between ">
             <div className="flex items-center gap-1">
-              <Button variant="ghost" size="icon-sm" type="button">
+              <Button variant="secondary" size="icon-sm" type="button">
                 <HiPaperClip className="size-4" />
               </Button>
               <Button
-                variant={planActive ? "secondary" : "ghost"}
+                variant="secondary"
                 size="sm"
                 type="button"
                 onClick={() => setPlanActive(!planActive)}
@@ -51,7 +52,7 @@ export default function Home() {
               </Button>
             </div>
             <Button size="sm" type="button">
-              <HiArrowUp className="size-4" />
+              <IoSend className="size-4 -rotate-45 -mr-1" />
             </Button>
           </div>
         </div>
