@@ -29,6 +29,7 @@ const features = [
     title: "Real-Time Preview",
     description:
       "Watch Your Website Come To Life As The AI Builds It. Every Component, Every Style Rendered Live In Your Browser.",
+    visual: "preview",
   },
   {
     title: "Full Codebase Export",
@@ -40,6 +41,7 @@ const features = [
     title: "Iterative Refinement",
     description:
       "Not Perfect On The First Try? Describe What To Change And VibeIt Updates Instantly. Build Through Conversation, Not Configuration.",
+    visual: "refinement",
   },
   {
     title: "Modern Tech Stack",
@@ -70,7 +72,7 @@ function WorkflowVisual() {
   const steps = ["Generate", "Iterate", "Preview", "Export or Deploy"];
   
   return (
-    <div className="relative flex h-full w-full flex-col items-center justify-center overflow-hidden bg-background py-8">
+    <div className="relative flex h-full w-full flex-col items-center justify-center overflow-hidden  py-8">
       <div className="flex flex-col gap-[-20px] scale-75 ">
         {steps.map((step, i) => (
           <div key={step} className="relative flex items-center gap-3 justify-start" style={{ marginTop: i === 0 ? 0 : "-60px", zIndex: steps.length - i }}>
@@ -132,6 +134,135 @@ function PromptVisual() {
         {/* Cursor Icon */}
         <div className="absolute bottom-3 right-1 translate-x-1/2 translate-y-1/2 ">
              <HiMiniCursorArrowRays className="size-8 text-foreground" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RefinementVisual() {
+  return (
+    <div className="relative flex h-full w-full overflow-hidden ">
+      {/* Outer box — lightish grey, offset from top-left, overflows bottom-right */}
+      <div className="absolute top-[10%] left-[8%] right-[-30%] bottom-[-30%] rounded-tl-xl bg-muted/50 border-t border-l border-border/40 p-1.5">
+        {/* Inner box — darker grey */}
+        <div className="relative flex h-full w-full overflow-hidden rounded-tl-lg bg-neutral-900 border-t border-l border-border/30">
+          {/* Chat panel — left side, main focus */}
+          <div className="flex w-[45%] shrink-0 flex-col border-r border-border/20 bg-neutral-950/40 px-3 py-3">
+            {/* Chat messages */}
+            <div className="flex flex-1 flex-col gap-2.5 overflow-hidden">
+              {/* AI message (left) */}
+              <div className="flex flex-col gap-1 items-start">
+                
+                <div className="rounded-lg rounded-tl-sm bg-neutral-800 px-2.5 py-2 max-w-[85%]">
+                  <div className="mb-1 h-1.5 w-16 rounded-full bg-muted-foreground/25" />
+                  <div className="h-1.5 w-10 rounded-full bg-muted-foreground/15" />
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1 items-end">
+                <div className="h-1.5 w-6 rounded-full bg-muted-foreground/20" />
+                <div className="rounded-lg rounded-tr-sm bg-neutral-700 px-2.5 py-2 max-w-[85%]">
+                  <div className="mb-1 h-1.5 w-14 rounded-full bg-muted-foreground/30" />
+                  <div className="h-1.5 w-8 rounded-full bg-muted-foreground/20" />
+                </div>
+              </div>
+
+              {/* AI message (left) */}
+              <div className="flex flex-col gap-1 items-start">
+                
+                <div className="rounded-lg rounded-tl-sm bg-neutral-800 px-2.5 py-2 max-w-[85%]">
+                  <div className="mb-1 h-1.5 w-20 rounded-full bg-muted-foreground/25" />
+                  <div className="mb-1 h-1.5 w-14 rounded-full bg-muted-foreground/15" />
+                  <div className="h-1.5 w-8 rounded-full bg-muted-foreground/15" />
+                </div>
+              </div>
+
+              {/* User message (right) */}
+              <div className="flex flex-col gap-1 items-end">
+                <div className="h-1.5 w-6 rounded-full bg-muted-foreground/20" />
+                <div className="rounded-lg rounded-tr-sm bg-neutral-700 px-2.5 py-2 max-w-[85%]">
+                  <div className="mb-1 h-1.5 w-14 rounded-full bg-muted-foreground/30" />
+                  <div className="h-1.5 w-8 rounded-full bg-muted-foreground/20" />
+                </div>
+              </div>
+
+              {/* AI message (left) */}
+              <div className="flex flex-col gap-1 items-start">
+                <div className="h-1.5 w-6 rounded-full bg-muted-foreground/20" />
+                <div className="rounded-lg rounded-tl-sm bg-neutral-800 px-2.5 py-2 max-w-[85%]">
+                  <div className="mb-1 h-1.5 w-18 rounded-full bg-muted-foreground/25" />
+                  <div className="h-1.5 w-12 rounded-full bg-muted-foreground/15" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Creator / Preview panel — right side, overflows */}
+          <div className="flex flex-1 flex-col bg-neutral-900">
+            {/* Browser chrome bar */}
+            <div className="flex items-center gap-1.5 border-b border-border/20 px-3 py-2">
+              <div className="size-1.5 rounded-full bg-muted-foreground/30" />
+              <div className="size-1.5 rounded-full bg-muted-foreground/30" />
+              <div className="size-1.5 rounded-full bg-muted-foreground/30" />
+              <div className="ml-2 h-2 w-16 rounded-full bg-muted-foreground/15" />
+            </div>
+            {/* Page content skeleton */}
+            <div className="flex flex-col items-center px-3 pt-5">
+              <div className="mb-1.5 h-2 w-[70%] rounded-sm bg-muted-foreground/15" />
+              <div className="mb-1 h-1.5 w-[50%] rounded-sm bg-muted-foreground/10" />
+              <div className="mb-3 h-1.5 w-[40%] rounded-sm bg-muted-foreground/10" />
+              <div className="mb-4 h-2 w-12 rounded-md bg-foreground/80" />
+              <div className="h-14 w-[80%] rounded-md bg-muted-foreground/8 border border-border/15" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PreviewVisual() {
+  return (
+    <div className="relative flex h-full w-full items-center justify-center overflow-hidden ">
+      {/* Desktop Monitor */}
+      <div className="relative ml-[-10px] mt-[-4px]">
+        {/* Screen bezel */}
+        <div className="relative h-[130px] w-[190px] rounded-lg border border-border/30 bg-neutral-900/60">
+          {/* Screen content */}
+          <div className="p-2.5">
+            {/* Browser chrome dot */}
+            <div className="mb-2.5 flex items-center gap-1.5">
+              <div className="size-2 rounded-full bg-foreground" />
+              <div className="h-2 w-10 rounded-full bg-foreground/80" />
+              <div className="h-2 w-8 rounded-full bg-foreground/80" />
+            </div>
+            {/* Hero bar */}
+            <div className="mx-auto mb-1.5 h-2.5 w-[75%] rounded-sm bg-muted-foreground/20" />
+            {/* Text lines */}
+            <div className="mx-auto mb-1 h-1.5 w-[60%] rounded-sm bg-muted-foreground/15" />
+            <div className="mx-auto mb-3 h-1.5 w-[45%] rounded-sm bg-muted-foreground/15" />
+            {/* CTA button */}
+            <div className="mx-auto h-2 w-14 rounded-md bg-foreground" />
+          </div>
+        </div>
+        {/* Monitor stand */}
+        <div className="mx-auto h-3 w-10 bg-neutral-700" />
+        <div className="mx-auto h-1.5 w-16 rounded-b-md bg-neutral-700" />
+      </div>
+
+      {/* Phone */}
+      <div className="absolute right-[10%] bottom-[10%] z-10 h-[120px] w-[60px] rounded-lg border border-border/30 bg-neutral-900 p-1.5">
+        {/* Phone content */}
+        <div className="flex h-full flex-col items-center pt-2">
+          {/* Text bars */}
+          <div className="mb-1 h-1.5 w-[80%] rounded-sm bg-muted-foreground/20" />
+          <div className="mb-1 h-1 w-[60%] rounded-sm bg-muted-foreground/15" />
+          <div className="mb-2.5 h-1 w-[50%] rounded-sm bg-muted-foreground/15" />
+          {/* CTA button */}
+          <div className="mb-3 h-1 w-10 rounded-md bg-foreground" />
+          {/* Card */}
+          <div className="h-8 w-10 rounded-md bg-muted-foreground/10 border border-border/20" />
         </div>
       </div>
     </div>
@@ -235,7 +366,7 @@ function TechStackVisual() {
 
 export default function FeaturesPage() {
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-16 sm:px-6 sm:py-24">
+    <div className="mx-auto w-full max-w-5xl py-16 px-6 sm:pb-24 pt-16">
       <div className="mb-12 text-center sm:mb-16">
         <p className="mb-3 text-sm font-medium uppercase tracking-widest text-muted-foreground">
           What VibeIt Can Do
@@ -265,6 +396,8 @@ export default function FeaturesPage() {
                 {feature.visual === "prompt" && <PromptVisual />}
                 {feature.visual === "workflow" && <WorkflowVisual />}
                 {feature.visual === "deploy" && <DeployVisual />}
+                {feature.visual === "preview" && <PreviewVisual />}
+                {feature.visual === "refinement" && <RefinementVisual />}
               </div>
             </div>
 
