@@ -1,4 +1,14 @@
 import { GoDotFill } from "react-icons/go";
+import { FaReact, FaGithub } from "react-icons/fa";
+import {
+  SiNextdotjs,
+  SiTailwindcss,
+  SiTypescript,
+  SiVercel,
+} from "react-icons/si";
+import { HiPaperClip, HiLightBulb, HiMiniCursorArrowRays } from "react-icons/hi2";
+import { IoMdSend } from "react-icons/io";
+import Image from "next/image";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
@@ -12,6 +22,7 @@ const features = [
     title: "Prompt to Production",
     description:
       "Describe Your Website In Natural Language. VibeIt Generates A Complete, Production-Ready Codebase — Not A Template, Real Code.",
+    visual: "prompt",
   },
   {
     title: "Real-Time Preview",
@@ -32,6 +43,7 @@ const features = [
     title: "Modern Tech Stack",
     description:
       "Every Website Is Built With React, Next.js, Tailwind CSS, And TypeScript. Industry-Standard Tools Developers Actually Use.",
+    visual: "tech-stack",
   },
   {
     title: "One-Click Deploy",
@@ -43,11 +55,130 @@ const features = [
 function CornerDots() {
   return (
     <>
-      <GoDotFill className="absolute top-1.5 left-1.5 size-3 text-muted-foreground/50" />
-      <GoDotFill className="absolute top-1.5 right-1.5 size-3 text-muted-foreground/50" />
-      <GoDotFill className="absolute bottom-1.5 left-1.5 size-3 text-muted-foreground/50" />
-      <GoDotFill className="absolute bottom-1.5 right-1.5 size-3 text-muted-foreground/50" />
+      <GoDotFill className="absolute z-10 top-1.5 left-1.5 size-3 text-muted-foreground" />
+      <GoDotFill className="absolute z-10 top-1.5 right-1.5 size-3 text-muted-foreground" />
+      <GoDotFill className="absolute z-10 bottom-1.5 left-1.5 size-3 text-muted-foreground" />
+      <GoDotFill className="absolute z-10 bottom-1.5 right-1.5 size-3 text-muted-foreground" />
     </>
+  );
+}
+
+function PromptVisual() {
+  return (
+    <div className="relative flex h-full w-full items-center justify-center overflow-hidden bg-background">
+      {/* Background Grid */}
+      <div className="absolute inset-0 grid grid-cols-4 grid-rows-4 gap-2 opacity-20 scale-110">
+        {Array.from({ length: 24 }).map((_, i) => (
+          <div
+            key={i}
+            className="rounded-xl border border-foreground/20 bg-muted/50 backdrop-blur-sm"
+          />
+        ))}
+      </div>
+
+      {/* Floating Prompt Input */}
+      <div className="relative z-10 w-[90%] max-w-[280px] rounded-xl border border-border bg-background p-3 shadow-2xl">
+        <div className="flex items-start gap-3">
+          <div className="flex-1 space-y-1">
+            <p className="text-[10px] font-medium leading-relaxed text-muted-foreground">
+              Create a modern landing page for a SaaS startup with dark mode and
+              bento grids...
+            </p>
+          </div>
+        </div>
+        
+        <div className="mt-3 flex items-center justify-between ">
+          <div className="flex items-center gap-1">
+            <div className="flex size-7 items-center justify-center rounded-md text-muted-foreground bg-muted/50">
+              <HiPaperClip className="size-3.5" />
+            </div>
+            <div className="flex h-7 items-center gap-1.5 rounded-md px-2 text-[10px] font-medium text-muted-foreground bg-muted/50 border border-transparent border-border/50 transition-colors">
+              <HiLightBulb className="size-3" />
+              Plan
+            </div>
+          </div>
+          <div className="flex size-7 items-center justify-center rounded-lg bg-foreground text-background shadow-sm opacity-90">
+             <IoMdSend className="size-4 -rotate-45 ml-1" />
+          </div>
+        </div>
+
+        {/* Cursor Icon */}
+        <div className="absolute bottom-3 right-1 translate-x-1/2 translate-y-1/2 ">
+             <HiMiniCursorArrowRays className="size-8 text-foreground" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TechStackVisual() {
+  return (
+    <div className="relative flex h-full w-full items-center justify-center overflow-hidden bg-gradient-to-b from-background/5 to-background/40">
+      {/* Container for shifting the whole visual */}
+      <div className="relative flex h-full w-full items-center justify-center -translate-y-4">
+        {/* Background Radial Gradient Shine */}
+        <div className="absolute left-1/2 top-1/2 h-[150%] w-[150%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(circle_at_center,var(--foreground)_0%,transparent_60%)] opacity-[0.03] dark:opacity-[0.08]" />
+
+        {/* Circle 1 (Inner) */}
+        <div className="absolute left-1/2 top-1/2 h-32 w-32 -translate-x-1/2 -translate-y-1/2 rounded-full border border-border/40" />
+
+        {/* Circle 2 (Middle) */}
+        <div className="absolute left-1/2 top-1/2 h-56 w-56 -translate-x-1/2 -translate-y-1/2 rounded-full border border-border/30" />
+
+        {/* Circle 3 (Outer) */}
+        <div className="absolute left-1/2 top-1/2 h-72 w-80 -translate-x-1/2 -translate-y-1/2 rounded-full border border-border/20" />
+
+        {/* Central Logo */}
+        <div className="relative z-10 flex items-center justify-center rounded-full bg-background border border-border shadow-2xl">
+          <Image
+            src="/logo.png"
+            alt="VibeIt Logo"
+            width={40}
+            height={40}
+            className="h-10 w-10 rounded-full object-contain "
+          />
+        </div>
+
+        {/* Inner Circle Icons */}
+        <div className="absolute inset-0">
+          {/* Next.js - Top Left Inner */}
+          <div className="absolute left-[24%] top-[35%] flex h-9 w-9 items-center justify-center rounded-full bg-background/90 border border-border shadow-sm z-10">
+            <SiNextdotjs className="size-4 text-foreground" />
+          </div>
+
+          {/* Tailwind - Bottom Right Inner */}
+          <div className="absolute right-[25%] bottom-[25%] flex h-9 w-9 items-center justify-center rounded-full bg-background/90 border border-border shadow-sm z-10">
+            <SiTailwindcss className="size-4 text-foreground" />
+          </div>
+        </div>
+
+        {/* Outer Circle Icons */}
+        <div className="absolute inset-0">
+          {/* React - Top Center Outer */}
+          <div className="absolute left-1/2 top-[15%] -translate-x-3/4 flex h-10 w-10 items-center justify-center rounded-full bg-background/90 border border-border shadow-sm z-10">
+            <FaReact className="size-5 text-foreground" />
+          </div>
+
+          {/* TypeScript - Left Outer */}
+          <div className="absolute left-[5%] top-1/2 -translate-y-1/2 flex h-10 w-10 items-center justify-center rounded-full bg-background/90 border border-border shadow-sm z-10">
+            <SiTypescript className="size-4 text-foreground" />
+          </div>
+
+          {/* Vercel - Right Outer */}
+          <div className="absolute right-[5%] top-2/5 -translate-y-1/2 flex h-10 w-10 items-center justify-center rounded-full bg-background/90 border border-border shadow-sm z-10">
+            <SiVercel className="size-4 text-foreground" />
+          </div>
+
+          {/* Github - Bottom Center Outer */}
+          <div className="absolute left-2/5 bottom-[5%] -translate-x-1/2 flex h-10 w-10 items-center justify-center rounded-full bg-background/90 border border-border shadow-sm z-10">
+            <FaGithub className="size-5 text-foreground" />
+          </div>
+        </div>
+      </div>
+
+      {/* Shine Overlay - Keep static relative to container */}
+      <div className="absolute -top-[100%] left-1/2 h-[200%] w-[100px] -translate-x-1/2 rotate-45 bg-gradient-to-r from-transparent via-foreground/5 to-transparent blur-3xl pointer-events-none" />
+    </div>
   );
 }
 
@@ -76,8 +207,12 @@ export default function FeaturesPage() {
             key={feature.title}
             className="overflow-hidden rounded-xl border border-border/40 bg-card"
           >
-            <div className="relative m-3 aspect-[4/3] rounded-lg border border-border/30 bg-background/60">
+            <div className="relative m-3 aspect-[4/3] rounded-lg border border-border/30 bg-background/60 overflow-hidden">
               <CornerDots />
+              <div className="absolute inset-0 rounded-lg bg-background/40">
+                {feature.visual === "tech-stack" && <TechStackVisual />}
+                {feature.visual === "prompt" && <PromptVisual />}
+              </div>
             </div>
 
             <div className="px-4 pb-5">
