@@ -57,12 +57,14 @@ function FAQItem({
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="border-b border-border/40">
+    <div className="overflow-hidden rounded-xl border border-border/40 bg-card">
       <button
         onClick={() => setOpen(!open)}
-        className="flex w-full items-center justify-between py-5 text-left"
+        className="flex w-full items-center justify-between px-5 py-4 text-left"
       >
-        <span className="text-sm font-medium sm:text-base">{question}</span>
+        <span className="text-base font-semibold tracking-tight">
+          {question}
+        </span>
         <HiChevronDown
           className={cn(
             "ml-4 size-4 shrink-0 text-muted-foreground",
@@ -71,9 +73,11 @@ function FAQItem({
         />
       </button>
       {open && (
-        <p className="pb-5 text-sm leading-relaxed text-muted-foreground">
-          {answer}
-        </p>
+        <div className="border-t border-border/30 px-5 pb-5 pt-4">
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            {answer}
+          </p>
+        </div>
       )}
     </div>
   );
@@ -95,9 +99,13 @@ export default function FAQsPage() {
         </p>
       </div>
 
-      <div className="divide-y-0">
+      <div className="flex flex-col gap-3">
         {faqs.map((faq) => (
-          <FAQItem key={faq.question} question={faq.question} answer={faq.answer} />
+          <FAQItem
+            key={faq.question}
+            question={faq.question}
+            answer={faq.answer}
+          />
         ))}
       </div>
     </div>

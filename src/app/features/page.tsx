@@ -1,11 +1,4 @@
-import {
-  HiCodeBracket,
-  HiEye,
-  HiArrowDownTray,
-  HiChatBubbleLeftRight,
-  HiSquares2X2,
-  HiRocketLaunch,
-} from "react-icons/hi2";
+import { GoDotFill } from "react-icons/go";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
@@ -16,42 +9,47 @@ export const metadata: Metadata = {
 
 const features = [
   {
-    icon: HiCodeBracket,
     title: "Prompt to Production",
     description:
-      "Describe your website in natural language. VibeIt generates a complete, production-ready codebase — not a template, not a mockup, real code.",
+      "Describe Your Website In Natural Language. VibeIt Generates A Complete, Production-Ready Codebase — Not A Template, Real Code.",
   },
   {
-    icon: HiEye,
     title: "Real-Time Preview",
     description:
-      "Watch your website come to life as the AI builds it. See every component, every style rendered live in your browser as it is generated.",
+      "Watch Your Website Come To Life As The AI Builds It. Every Component, Every Style Rendered Live In Your Browser.",
   },
   {
-    icon: HiArrowDownTray,
     title: "Full Codebase Export",
     description:
-      "Download clean, well-organized project files. Open in VS Code, push to GitHub, or deploy anywhere. The code is entirely yours.",
+      "Download Clean, Well-Organized Project Files. Open In VS Code, Push To GitHub, Or Deploy Anywhere. The Code Is Yours.",
   },
   {
-    icon: HiChatBubbleLeftRight,
     title: "Iterative Refinement",
     description:
-      "Not perfect on the first try? Describe what to change and VibeIt updates your website instantly. Build through conversation, not configuration.",
+      "Not Perfect On The First Try? Describe What To Change And VibeIt Updates Instantly. Build Through Conversation, Not Configuration.",
   },
   {
-    icon: HiSquares2X2,
     title: "Modern Tech Stack",
     description:
-      "Every website is built with React, Next.js, Tailwind CSS, and TypeScript. Industry-standard tools that developers actually use in production.",
+      "Every Website Is Built With React, Next.js, Tailwind CSS, And TypeScript. Industry-Standard Tools Developers Actually Use.",
   },
   {
-    icon: HiRocketLaunch,
     title: "One-Click Deploy",
     description:
-      "Go from idea to live website in minutes. Deploy directly to Vercel, Netlify, or download the complete project to host wherever you want.",
+      "Go From Idea To Live Website In Minutes. Deploy Directly To Vercel, Netlify, Or Download The Project To Host Anywhere.",
   },
 ];
+
+function CornerDots() {
+  return (
+    <>
+      <GoDotFill className="absolute top-1.5 left-1.5 size-3 text-muted-foreground/50" />
+      <GoDotFill className="absolute top-1.5 right-1.5 size-3 text-muted-foreground/50" />
+      <GoDotFill className="absolute bottom-1.5 left-1.5 size-3 text-muted-foreground/50" />
+      <GoDotFill className="absolute bottom-1.5 right-1.5 size-3 text-muted-foreground/50" />
+    </>
+  );
+}
 
 export default function FeaturesPage() {
   return (
@@ -72,19 +70,24 @@ export default function FeaturesPage() {
         </p>
       </div>
 
-      <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
         {features.map((feature) => (
           <div
             key={feature.title}
-            className="rounded-xl border border-border/40 bg-card p-6"
+            className="overflow-hidden rounded-xl border border-border/40 bg-card"
           >
-            <div className="mb-4 flex size-10 items-center justify-center rounded-lg bg-muted">
-              <feature.icon className="size-5 text-foreground" />
+            <div className="relative m-3 aspect-[4/3] rounded-lg border border-border/30 bg-background/60">
+              <CornerDots />
             </div>
-            <h3 className="mb-2 text-base font-semibold">{feature.title}</h3>
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              {feature.description}
-            </p>
+
+            <div className="px-4 pb-5">
+              <h3 className="text-lg font-semibold tracking-tight">
+                {feature.title}
+              </h3>
+              <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                {feature.description}
+              </p>
+            </div>
           </div>
         ))}
       </div>
