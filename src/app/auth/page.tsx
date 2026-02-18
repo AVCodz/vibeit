@@ -1,18 +1,21 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { HiPaperClip, HiLightBulb, HiEye, HiEyeSlash } from "react-icons/hi2";
+import { HiPaperClip, HiLightBulb } from "react-icons/hi2";
 import { IoSend } from "react-icons/io5";
 import { FaGoogle, FaGithub, FaChevronLeft } from "react-icons/fa";
-import { cn } from "@/lib/utils";
-
-type AuthMode = "signin" | "signup";
 
 const PROMPT_PREFIX = "Ask VibeIt to ";
 const PROMPT_SUFFIXES = [
@@ -22,18 +25,7 @@ const PROMPT_SUFFIXES = [
   "create a website for a portfolio with modern animations.",
 ];
 
-function AuthFormWrapper() {
-  const searchParams = useSearchParams();
-  const modeParam = searchParams.get("mode");
-  const initialMode: AuthMode =
-    modeParam === "signin" ? "signin" : "signup";
-
-  return <AuthForm key={modeParam} initialMode={initialMode} />;
-}
-
-function AuthForm({ initialMode }: { initialMode: AuthMode }) {
-  const [mode, setMode] = useState<AuthMode>(initialMode);
-  const [showPassword, setShowPassword] = useState(false);
+export default function AuthPage() {
   const [planActive, setPlanActive] = useState(false);
   const [promptIndex, setPromptIndex] = useState(0);
   const [displayedText, setDisplayedText] = useState("");
@@ -77,7 +69,6 @@ function AuthForm({ initialMode }: { initialMode: AuthMode }) {
 
   return (
     <div className="grid min-h-screen w-full lg:grid-cols-2">
-      {/* Left Panel - Desktop Only */}
       <div className="relative hidden border-r border-border bg-background lg:flex lg:flex-col lg:justify-between lg:p-12">
         <div
           aria-hidden="true"
@@ -136,179 +127,64 @@ function AuthForm({ initialMode }: { initialMode: AuthMode }) {
       </div>
 
       {/* Right Panel */}
-      <div className="relative flex flex-col justify-center bg-background p-8 lg:p-12">
+      <div className="relative flex h-full flex-col items-center justify-center bg-background p-8 lg:p-12">
         <Link
           href="/"
-          className="absolute left-8 top-8 flex items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
+          className="absolute left-4 top-4 flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:left-8 lg:top-8"
         >
           <FaChevronLeft className="size-3" />
-          Home
+          Back
         </Link>
 
-        <div className="mx-auto w-full max-w-sm space-y-8 text-left">
+        <div className="w-full max-w-sm">
+          <Card className="border-none shadow-none sm:border sm:shadow-sm">
+            <CardHeader className="space-y-1 text-center">
+              <CardTitle className="text-2xl font-bold tracking-tight">Create your account</CardTitle>
+              <CardDescription>
+                Connect your professional identity to get started
+              </CardDescription>
+            </CardHeader>
 
-          {/* Auth Toggle */}
-          <div className="space-y-6">
-            <div className="space-y-2">
-              <h2 className="text-2xl font-bold tracking-tight">
-                {mode === "signin" ? "Welcome back" : "Create an account"}
-              </h2>
-              <p className="text-sm text-muted-foreground">
-                {mode === "signin"
-                  ? "Enter your email to sign in to your account"
-                  : "Enter your email below to create your account"}
-              </p>
-            </div>
-
-                <div className="relative flex rounded-lg border border-border/40 bg-muted/50 p-1">
-                <span
-                    aria-hidden="true"
-                    className={cn(
-                      "absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-md bg-background shadow-sm transition-transform duration-300 ease-out",
-                      mode === "signup" && "translate-x-full"
-                    )}
-                />
-                <button
-                    onClick={() => setMode("signin")}
-                    aria-pressed={mode === "signin"}
-                    className={cn(
-                    "relative z-10 flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-                    mode === "signin"
-                        ? "text-foreground"
-                        : "text-muted-foreground hover:text-foreground"
-                    )}
-                >
-                    Sign In
-                </button>
-                <button
-                    onClick={() => setMode("signup")}
-                    aria-pressed={mode === "signup"}
-                    className={cn(
-                    "relative z-10 flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-                    mode === "signup"
-                        ? "text-foreground"
-                        : "text-muted-foreground hover:text-foreground"
-                    )}
-                >
-                Sign Up
-              </button>
-            </div>
-
-
-          </div>
-
-          {/* Form */}
-          <form className="space-y-4">
-            <div className="space-y-2">
-                <label
-                htmlFor="email"
-                className="text-sm font-medium text-foreground"
-              >
-                Email
-              </label>
-              <Input id="email" type="email" placeholder="you@example.com" />
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <label
-                  htmlFor="password"
-                  className="text-sm font-medium text-foreground"
-                >
-                  Password
-                </label>
-                {mode === "signin" && (
-                  <button
-                    type="button"
-                    className="text-xs text-muted-foreground hover:text-foreground"
-                  >
-                    Forgot password?
-                  </button>
-                )}
-              </div>
+            <CardContent className="grid gap-6">
               <div className="relative">
-                <Input
-                  id="password"
-                  type={showPassword ? "text" : "password"}
-                  placeholder="••••••••"
-                  className="pr-10"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((prev) => !prev)}
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
-                >
-                  {showPassword ? (
-                    <HiEyeSlash className="size-4" />
-                  ) : (
-                    <HiEye className="size-4" />
-                  )}
-                </button>
+                <div className="absolute inset-0 flex items-center">
+                  <Separator />
+                </div>
+                <div className="relative flex justify-center text-xs uppercase">
+                  <span className=" px-2 text-muted-foreground">
+                    Continue with
+                  </span>
+                </div>
               </div>
-            </div>
 
-            <Button type="button" className="w-full">
-              {mode === "signin" ? "Sign In" : "Create Account"}
-            </Button>
-          </form>
+              <div className="grid gap-3">
+                <Button  className="relative h-11 bg-foreground hover:bg-foreground/90 w-full font-medium transition-all  hover:text-background">
+                  <FaGoogle className=" size-4 text-background" />
+                  <span>Continue with Google</span>
+                </Button>
+                <Button  className="relative h-11 bg-foreground hover:bg-foreground/90 w-full font-medium transition-all  hover:text-background">
+                  <FaGithub className=" size-4 text-background" />
+                  <span> Continue with GitHub</span>
+                </Button>
+              </div>
+            </CardContent>
 
-          <div className="flex items-center gap-3">
-            <Separator className="flex-1" />
-            <span className="text-xs text-muted-foreground">Or continue with</span>
-            <Separator className="flex-1" />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <Button
-              type="button"
-              className="w-full bg-foreground text-background hover:bg-foreground/90"
-            >
-              <FaGoogle className="mr-2 size-4" />
-              Google
-            </Button>
-            <Button
-              type="button"
-              className="w-full bg-foreground text-background hover:bg-foreground/90"
-            >
-              <FaGithub className="mr-2 size-4" />
-              GitHub
-            </Button>
-          </div>
-
-          <p className="text-xs text-muted-foreground">
-            {mode === "signin" ? (
-              <>
-                Don&apos;t have an account?{" "}
-                <button
-                  onClick={() => setMode("signup")}
-                  className="font-medium text-foreground hover:underline"
-                >
-                  Sign up
-                </button>
-              </>
-            ) : (
-              <>
-                Already have an account?{" "}
-                <button
-                  onClick={() => setMode("signin")}
-                  className="font-medium text-foreground hover:underline"
-                >
-                  Sign in
-                </button>
-              </>
-            )}
-          </p>
+            <CardFooter>
+              <p className="w-full text-center text-xs text-muted-foreground">
+                By clicking continue, you agree to our{" "}
+                <Link href="#" className="underline underline-offset-4 hover:text-primary">
+                  Terms of Service
+                </Link>{" "}
+                and{" "}
+                <Link href="#" className="underline underline-offset-4 hover:text-primary">
+                  Privacy Policy
+                </Link>
+                .
+              </p>
+            </CardFooter>
+          </Card>
         </div>
       </div>
     </div>
-  );
-}
-
-export default function AuthPage() {
-  return (
-    <Suspense>
-      <AuthFormWrapper />
-    </Suspense>
   );
 }

@@ -59,6 +59,7 @@ export default function Home() {
 
   return (
     <div className="flex flex-1  flex-col items-center justify-center px-4  sm:px-6">
+      <div className="pointer-events-none fixed inset-0 -z-20 h-full w-full bg-[radial-gradient(circle_at_center,rgba(200,200,200,0.10),transparent_60%)]" />
       <DottedSurface />
       <div className="w-full max-w-2xl text-center">
         <p className="animate-fade-up mb-4 text-sm font-medium uppercase tracking-widest text-muted-foreground opacity-0 [animation-delay:200ms]">
