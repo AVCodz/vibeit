@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import Image from "next/image";
-import { HiBars3, HiXMark } from "react-icons/hi2";
+import { HiBars3, HiXMark, HiFolderOpen } from "react-icons/hi2";
 import { signOut, useSession } from "@/lib/auth-client";
 
 const navLinks = [
@@ -94,6 +94,13 @@ export function Header() {
                 <p className="truncate px-2 py-1 text-xs text-muted-foreground">
                   {session.user.email}
                 </p>
+                <Link
+                  href="/projects"
+                  className="mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+                >
+                  <HiFolderOpen className="size-4 text-muted-foreground" />
+                  Projects
+                </Link>
                 <Button
                   variant="ghost"
                   size="sm"
@@ -188,6 +195,14 @@ export function Header() {
                       <p className="truncate text-[11px] text-muted-foreground">{session.user.email}</p>
                     </div>
                   </div>
+                  <Link
+                    href="/projects"
+                    onClick={closeMobileMenu}
+                    className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+                  >
+                    <HiFolderOpen className="size-4 text-muted-foreground" />
+                    Projects
+                  </Link>
                   <Button
                     variant="ghost"
                     className="w-full justify-start"
