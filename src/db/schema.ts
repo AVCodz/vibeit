@@ -54,21 +54,11 @@ export const verifications = pgTable("verification", {
   updatedAt: timestamp("updated_at", { withTimezone: true }),
 });
 
-export const users = pgTable("users", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  authUserId: text("auth_user_id").notNull().unique(),
-  email: text("email").notNull().unique(),
-  name: text("name"),
-  avatarUrl: text("avatar_url"),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
-
 export const projects = pgTable("projects", {
     id: uuid("id").defaultRandom().primaryKey(),
-    userId: uuid("user_id")
+    userId: text("user_id")
       .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+      .references(() => authUsers.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     description: text("description"),
     framework: text("framework").notNull().default("react-vite-ts"),
@@ -137,9 +127,9 @@ export const projectFiles = pgTable(
 
 export const usageEvents = pgTable("usage_events", {
   id: uuid("id").defaultRandom().primaryKey(),
-  userId: uuid("user_id")
+  userId: text("user_id")
     .notNull()
-    .references(() => users.id, { onDelete: "cascade" }),
+    .references(() => authUsers.id, { onDelete: "cascade" }),
   projectId: uuid("project_id").references(() => projects.id, {
     onDelete: "set null",
   }),

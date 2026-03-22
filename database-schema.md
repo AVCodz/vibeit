@@ -55,18 +55,9 @@
 
 ### App tables
 
-- `users`
-  - `id`
-  - `auth_user_id`
-  - `email`
-  - `name`
-  - `avatar_url`
-  - `created_at`
-  - `updated_at`
-
 - `projects`
   - `id`
-  - `user_id`
+  - `user_id` (FK to Better Auth `user.id`)
   - `name`
   - `description`
   - `framework` (fixed: `react-vite-ts`)
@@ -114,7 +105,7 @@
 
 - `usage_events`
   - `id`
-  - `user_id`
+  - `user_id` (FK to Better Auth `user.id`)
   - `project_id`
   - `session_id`
   - `event_type`

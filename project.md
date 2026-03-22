@@ -98,11 +98,11 @@ VibeIt is an AI app builder where users describe what they want, and the system 
 
 ### ERD (high level)
 
-- users -> projects (1:N)
+- user (BetterAuth) -> projects (1:N)
 - projects -> project_sessions (1:N)
 - projects -> project_files (1:N metadata)
 - projects -> agent_runs (1:N)
-- users -> usage_events (1:N)
+- user (BetterAuth) -> usage_events (1:N)
 
 ### SQL Draft
 
@@ -110,21 +110,10 @@ VibeIt is an AI app builder where users describe what they want, and the system 
 -- Extensions
 create extension if not exists "pgcrypto";
 
--- Users (linked to BetterAuth user id)
-create table if not exists users (
-  id uuid primary key default gen_random_uuid(),
-  auth_user_id text not null unique,
-  email text not null unique,
-  name text,
-  avatar_url text,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
 -- Projects
 create table if not exists projects (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references users(id) on delete cascade,
+  user_id text not null references "user"(id) on delete cascade,
   name text not null,
   description text,
   framework text not null default 'react-vite-ts',
@@ -190,7 +179,7 @@ create index if not exists agent_runs_session_id_idx on agent_runs(session_id);
 -- Usage/billing telemetry
 create table if not exists usage_events (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references users(id) on delete cascade,
+  user_id text not null references "user"(id) on delete cascade,
   project_id uuid references projects(id) on delete set null,
   session_id uuid references project_sessions(id) on delete set null,
   event_type text not null, -- box_created|box_deleted|prompt_run|r2_sync|preview_created
