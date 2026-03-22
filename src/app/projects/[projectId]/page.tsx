@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
+  HiArrowLeft,
   HiArrowPath,
   HiChevronDown,
   HiChevronRight,
@@ -719,13 +720,13 @@ export default function ProjectWorkspacePage() {
     }
   };
 
-  const handleCloseProject = async () => {
+  const handleBackToDashboard = async () => {
     if (!projectId || isClosing) {
       return;
     }
 
     setIsClosing(true);
-    setActivity("Closing project...");
+    setActivity("Closing project and syncing files...");
 
     try {
       const response = await fetch(`/api/projects/${projectId}/close`, {
@@ -1021,16 +1022,16 @@ export default function ProjectWorkspacePage() {
               ) : (
                 <h1 className="text-xl font-semibold tracking-tight">{projectName}</h1>
               )}
-              <p className="text-sm text-muted-foreground">{projectId}</p>
             </div>
             <Button
               type="button"
               size="sm"
               variant="secondary"
-              onClick={handleCloseProject}
+              onClick={handleBackToDashboard}
               disabled={isClosing || isOpening || isRunning}
             >
-              {isClosing ? "Closing..." : "Close Project"}
+              <HiArrowLeft className="size-4" />
+              {isClosing ? "Closing..." : "Back"}
             </Button>
           </div>
 
