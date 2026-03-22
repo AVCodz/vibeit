@@ -1,6 +1,8 @@
 "use client";
 
 import Editor from "@monaco-editor/react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
@@ -38,6 +40,41 @@ type FileNode = {
   isDir: boolean;
   children: FileNode[];
 };
+
+type ActivityEntryKind = "reasoning" | "tool" | "preview" | "status";
+
+type LiveActivityEntry = {
+  id: string;
+  text: string;
+  kind: ActivityEntryKind;
+  timestamp: number;
+};
+
+const ACTIVITY_FEED_MAX = 30;
+
+const FILE_WRITE_VERBS = ["write", "edit", "create", "update", "overwrite", "patch", "save"];
+
+function truncateText(text: string, maxLength: number) {
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength)}…`;
+}
+
+function parseToolActivity(toolName: string, input: unknown): string {
+  const inputObj = (input && typeof input === "object") ? input as Record<string, unknown> : null;
+  const filePath = inputObj && typeof inputObj.path === "string" ? inputObj.path : null;
+
+  const isFileWrite = FILE_WRITE_VERBS.some((verb) => toolName.toLowerCase().includes(verb));
+
+  if (isFileWrite && filePath) {
+    return `Updated ${filePath}`;
+  }
+
+  if (filePath) {
+    return `${toolName} → ${filePath}`;
+  }
+
+  return `Tool: ${toolName}`;
+}
 
 function randomId() {
   return crypto.randomUUID();
@@ -146,6 +183,8 @@ export default function ProjectWorkspacePage() {
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({
     src: true,
   });
+  const [liveActivity, setLiveActivity] = useState<LiveActivityEntry[]>([]);
+  const activityFeedRef = useRef<HTMLDivElement>(null);
   const initialPromptRan = useRef(false);
   const router = useRouter();
 
@@ -215,6 +254,35 @@ export default function ProjectWorkspacePage() {
       return next.slice(-120);
     });
   }, []);
+
+  const replaceProjectUrlParams = useCallback(
+    (updater: (params: URLSearchParams) => void) => {
+      if (!projectId) {
+        return;
+      }
+
+      const params = new URLSearchParams(window.location.search);
+      updater(params);
+      const query = params.toString();
+      const nextUrl = query.length > 0 ? `/projects/${projectId}?${query}` : `/projects/${projectId}`;
+      window.history.replaceState(null, "", nextUrl);
+    },
+    [projectId],
+  );
+
+  const setPreviewUrlWithRoute = useCallback(
+    (url: string) => {
+      setPreviewUrl(url);
+      replaceProjectUrlParams((params) => {
+        if (url) {
+          params.set("preview", url);
+        } else {
+          params.delete("preview");
+        }
+      });
+    },
+    [replaceProjectUrlParams],
+  );
 
   const loadFiles = useCallback(async () => {
     if (!projectId) {
@@ -291,6 +359,23 @@ export default function ProjectWorkspacePage() {
     },
     [projectId],
   );
+
+  const pushActivityEntry = useCallback((text: string, kind: ActivityEntryKind) => {
+    setLiveActivity((current) => {
+      const entry: LiveActivityEntry = {
+        id: randomId(),
+        text,
+        kind,
+        timestamp: Date.now(),
+      };
+      const next = [...current, entry];
+      return next.length > ACTIVITY_FEED_MAX ? next.slice(-ACTIVITY_FEED_MAX) : next;
+    });
+  }, []);
+
+  const clearActivityFeed = useCallback(() => {
+    setLiveActivity([]);
+  }, []);
 
   const appendAssistantText = useCallback((messageId: string, text: string) => {
     setMessages((current) =>
@@ -446,9 +531,9 @@ export default function ProjectWorkspacePage() {
           const payload = JSON.parse(dataMatch[1] ?? "{}");
 
             if (eventName === "run.started") {
-            if (typeof payload.previewUrl === "string" && payload.previewUrl.length > 0) {
-              setPreviewUrl(payload.previewUrl);
-            }
+              if (typeof payload.previewUrl === "string" && payload.previewUrl.length > 0) {
+                setPreviewUrlWithRoute(payload.previewUrl);
+              }
             if (typeof payload.projectName === "string" && payload.projectName.length > 0) {
               applyProjectName(payload.projectName);
             }
@@ -497,13 +582,14 @@ export default function ProjectWorkspacePage() {
             if (eventName === "preview.status") {
               if (typeof payload.message === "string" && payload.message.length > 0) {
                 setActivity(payload.message);
+                pushActivityEntry(payload.message, "preview");
               }
               continue;
             }
 
             if (eventName === "preview.ready") {
               if (typeof payload.previewUrl === "string" && payload.previewUrl.length > 0) {
-                setPreviewUrl(payload.previewUrl);
+                setPreviewUrlWithRoute(payload.previewUrl);
               }
               setActivity("Preview ready");
               continue;
@@ -527,12 +613,18 @@ export default function ProjectWorkspacePage() {
 
           if (eventName === "run.reasoning") {
             setActivity("Thinking...");
+            if (typeof payload.text === "string" && payload.text.trim().length > 0) {
+              pushActivityEntry(`Thinking: ${truncateText(payload.text.trim(), 120)}`, "reasoning");
+            } else {
+              pushActivityEntry("Thinking…", "reasoning");
+            }
             continue;
           }
 
           if (eventName === "run.tool") {
             if (typeof payload.name === "string") {
               setActivity(`Tool: ${payload.name}`);
+              pushActivityEntry(parseToolActivity(payload.name, payload.input), "tool");
             }
             upsertFileFromToolInput(payload.input);
             continue;
@@ -552,6 +644,7 @@ export default function ProjectWorkspacePage() {
                 ),
               );
             }
+            clearActivityFeed();
             setActivity("Run finished");
             continue;
           }
@@ -567,6 +660,7 @@ export default function ProjectWorkspacePage() {
                   : message,
               ),
             );
+            clearActivityFeed();
             setActivity("Run failed");
           }
         }
@@ -586,12 +680,13 @@ export default function ProjectWorkspacePage() {
             : message,
         ),
       );
+      clearActivityFeed();
       setActivity(error instanceof Error ? error.message : "Run failed");
     } finally {
       setIsRunning(false);
       setInitialMessageIds(null);
     }
-  }, [appendAssistantText, applyProjectName, isWorkspaceReady, loadFiles, loadMessages, projectId, upsertFileFromToolInput]);
+  }, [appendAssistantText, applyProjectName, clearActivityFeed, isWorkspaceReady, loadFiles, loadMessages, projectId, pushActivityEntry, setPreviewUrlWithRoute, upsertFileFromToolInput]);
 
   const handleEnhancePrompt = async () => {
     const prompt = chatInput.trim();
@@ -656,6 +751,7 @@ export default function ProjectWorkspacePage() {
     const initialPrompt = query.get("prompt") ?? "";
     const initialUserMessageId = query.get("umid") ?? "";
     const initialAssistantMessageId = query.get("amid") ?? "";
+    const autoStart = query.get("autostart") === "1";
 
     if (initialName) {
       applyProjectName(initialName);
@@ -665,6 +761,7 @@ export default function ProjectWorkspacePage() {
       initialPrompt &&
       initialUserMessageId &&
       initialAssistantMessageId &&
+      autoStart &&
       !initialPromptRan.current
     ) {
       initialPromptRan.current = true;
@@ -690,130 +787,184 @@ export default function ProjectWorkspacePage() {
       setIsMessagesLoading(false);
     }
 
+    if (autoStart || initialPrompt || initialUserMessageId || initialAssistantMessageId) {
+      replaceProjectUrlParams((params) => {
+        params.delete("autostart");
+        params.delete("prompt");
+        params.delete("umid");
+        params.delete("amid");
+      });
+    }
+
     if (preview) {
-      setPreviewUrl(preview);
+      setPreviewUrlWithRoute(preview);
       setIsWorkspaceReady(true);
       setActivity("Project ready");
-    } else if (projectId) {
-      setIsOpening(true);
-      setIsWorkspaceReady(false);
-      setActivity("Preparing your workspace...");
+    }
 
-      const abortController = new AbortController();
+    if (!projectId) {
+      return;
+    }
 
-      void (async () => {
-        try {
-          const response = await fetch(`/api/projects/${projectId}/open/stream`, {
-            method: "POST",
-            signal: abortController.signal,
-          });
+    const abortController = new AbortController();
 
-          if (!response.ok || !response.body) {
-            const data = (await response.json().catch(() => ({}))) as { error?: string };
-            throw new Error(data.error ?? "Failed to open project");
+    void (async () => {
+      try {
+        const stateResponse = await fetch(`/api/projects/${projectId}/state`, {
+          cache: "no-store",
+          signal: abortController.signal,
+        });
+        const stateData = (await stateResponse.json()) as {
+          projectName?: string;
+          previewUrl?: string | null;
+          hasActiveSession?: boolean;
+          workspaceReady?: boolean;
+          error?: string;
+        };
+
+        if (!stateResponse.ok) {
+          throw new Error(stateData.error ?? "Failed to load project state");
+        }
+
+        if (abortController.signal.aborted) {
+          return;
+        }
+
+        if (typeof stateData.projectName === "string" && stateData.projectName.length > 0) {
+          applyProjectName(stateData.projectName);
+        }
+
+        if (typeof stateData.previewUrl === "string" && stateData.previewUrl.length > 0) {
+          setPreviewUrlWithRoute(stateData.previewUrl);
+        }
+
+        if (stateData.workspaceReady) {
+          setIsWorkspaceReady(true);
+        }
+
+        if (stateData.hasActiveSession) {
+          setIsOpening(false);
+          setActivity(stateData.previewUrl ? "Project ready" : "Workspace ready, generating your project...");
+          return;
+        }
+
+        setIsOpening(true);
+        setIsWorkspaceReady(false);
+        setActivity("Preparing your workspace...");
+
+        const response = await fetch(`/api/projects/${projectId}/open/stream`, {
+          method: "POST",
+          signal: abortController.signal,
+        });
+
+        if (!response.ok || !response.body) {
+          const data = (await response.json().catch(() => ({}))) as { error?: string };
+          throw new Error(data.error ?? "Failed to open project");
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let openReadyReceived = false;
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) {
+            break;
           }
 
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = "";
-          let openReadyReceived = false;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop() ?? "";
 
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) {
-              break;
+          for (const part of parts) {
+            const eventMatch = part.match(/^event:\s*(.+)$/m);
+            const dataMatch = part.match(/^data:\s*(.+)$/m);
+
+            if (!eventMatch || !dataMatch) {
+              continue;
             }
 
-            buffer += decoder.decode(value, { stream: true });
-            const parts = buffer.split("\n\n");
-            buffer = parts.pop() ?? "";
+            const eventName = eventMatch[1]?.trim();
+            const payload = JSON.parse(dataMatch[1] ?? "{}");
 
-            for (const part of parts) {
-              const eventMatch = part.match(/^event:\s*(.+)$/m);
-              const dataMatch = part.match(/^data:\s*(.+)$/m);
+            if (eventName === "open.status") {
+              if (typeof payload.message === "string" && payload.message.length > 0) {
+                setActivity(payload.message);
+                appendBootstrapLog(payload.message);
+              }
+              continue;
+            }
 
-              if (!eventMatch || !dataMatch) {
-                continue;
+            if (eventName === "open.log") {
+              if (typeof payload.message === "string" && payload.message.length > 0) {
+                appendBootstrapLog(payload.message);
+              }
+              continue;
+            }
+
+            if (eventName === "project.renamed") {
+              if (typeof payload.name === "string" && payload.name.length > 0) {
+                applyProjectName(payload.name);
+              }
+              continue;
+            }
+
+            if (eventName === "open.ready") {
+              if (typeof payload.projectName === "string" && payload.projectName.length > 0) {
+                applyProjectName(payload.projectName);
+              }
+              if (typeof payload.previewUrl === "string" && payload.previewUrl.length > 0) {
+                setPreviewUrlWithRoute(payload.previewUrl);
               }
 
-              const eventName = eventMatch[1]?.trim();
-              const payload = JSON.parse(dataMatch[1] ?? "{}");
+              setActivity("Workspace ready, generating your project...");
+              setIsWorkspaceReady(true);
+              setIsOpening(false);
+              openReadyReceived = true;
+              continue;
+            }
 
-              if (eventName === "open.status") {
-                if (typeof payload.message === "string" && payload.message.length > 0) {
-                  setActivity(payload.message);
-                  appendBootstrapLog(payload.message);
-                }
-                continue;
-              }
-
-              if (eventName === "open.log") {
-                if (typeof payload.message === "string" && payload.message.length > 0) {
-                  appendBootstrapLog(payload.message);
-                }
-                continue;
-              }
-
-              if (eventName === "project.renamed") {
-                if (typeof payload.name === "string" && payload.name.length > 0) {
-                  applyProjectName(payload.name);
-                }
-                continue;
-              }
-
-              if (eventName === "open.ready") {
-                if (typeof payload.projectName === "string" && payload.projectName.length > 0) {
-                  applyProjectName(payload.projectName);
-                }
-
-                setActivity("Workspace ready, generating your project...");
-                setIsWorkspaceReady(true);
-                setIsOpening(false);
-                openReadyReceived = true;
-                continue;
-              }
-
-              if (eventName === "open.failed") {
-                setActivity(
-                  typeof payload.error === "string" && payload.error.length > 0
-                    ? payload.error
-                    : "Failed to open project",
-                );
-                setMessages((current) =>
-                  current.map((message) =>
-                    message.role === "assistant" && message.status === "analyzing"
-                      ? {
-                          ...message,
-                          status: "failed",
-                        }
-                      : message,
-                  ),
-                );
-                setIsWorkspaceReady(false);
-                setIsOpening(false);
-              }
+            if (eventName === "open.failed") {
+              setActivity(
+                typeof payload.error === "string" && payload.error.length > 0
+                  ? payload.error
+                  : "Failed to open project",
+              );
+              setMessages((current) =>
+                current.map((message) =>
+                  message.role === "assistant" && message.status === "analyzing"
+                    ? {
+                        ...message,
+                        status: "failed",
+                      }
+                    : message,
+                ),
+              );
+              setIsWorkspaceReady(false);
+              setIsOpening(false);
             }
           }
+        }
 
-          if (!openReadyReceived && !abortController.signal.aborted) {
-            setIsWorkspaceReady(false);
-            setIsOpening(false);
-          }
-        } catch (error) {
-          if (abortController.signal.aborted) {
-            return;
-          }
-          setActivity(error instanceof Error ? error.message : "Failed to open project");
+        if (!openReadyReceived && !abortController.signal.aborted) {
           setIsWorkspaceReady(false);
           setIsOpening(false);
         }
-      })();
+      } catch (error) {
+        if (abortController.signal.aborted) {
+          return;
+        }
+        setActivity(error instanceof Error ? error.message : "Failed to open project");
+        setIsWorkspaceReady(false);
+        setIsOpening(false);
+      }
+    })();
 
-      return () => {
-        abortController.abort();
-      };
-    }
-  }, [appendBootstrapLog, applyProjectName, projectId]);
+    return () => {
+      abortController.abort();
+    };
+  }, [appendBootstrapLog, applyProjectName, projectId, replaceProjectUrlParams, setPreviewUrlWithRoute]);
 
   useEffect(() => {
     if (!queuedPrompt || !isWorkspaceReady || isOpening || isRunning) {
@@ -853,10 +1004,16 @@ export default function ProjectWorkspacePage() {
     });
   }, [loadFileContent, selectedFile]);
 
+  useEffect(() => {
+    if (activityFeedRef.current) {
+      activityFeedRef.current.scrollTop = activityFeedRef.current.scrollHeight;
+    }
+  }, [liveActivity]);
+
   return (
     <main className="min-h-screen bg-background text-foreground">
       <div className="mx-auto grid min-h-screen w-full max-w-[1800px] grid-cols-1 gap-3 p-3 lg:grid-cols-[420px_1fr]">
-        <section className="flex min-h-[40vh] flex-col rounded-2xl border border-border/70 bg-card/60 p-4 lg:min-h-0">
+        <section className="flex h-[calc(100dvh-1.5rem)] min-h-0 flex-col overflow-hidden rounded-2xl border border-border/70 bg-card/60 p-4">
           <div className="mb-4 flex items-center justify-between">
             <div>
               {isProjectNameLoading ? (
@@ -877,30 +1034,88 @@ export default function ProjectWorkspacePage() {
             </Button>
           </div>
 
-          <div className="mb-4 flex-1 space-y-4 overflow-auto pr-1">
-            {isMessagesLoading ? (
-              <div className="space-y-2">
-                <div className="h-12 w-[70%] animate-pulse rounded-2xl bg-secondary/60" />
-                <div className="ml-auto h-12 w-[62%] animate-pulse rounded-2xl bg-blue-500/20" />
-              </div>
-            ) : messages.length === 0 ? (
-              <div className="rounded-xl border border-border/60 bg-background/50 p-3 text-sm text-muted-foreground">
-                Send your first prompt to start generating files.
+          <div className="mb-4 flex min-h-0 flex-1 flex-col gap-3">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+              {isMessagesLoading ? (
+                <div className="space-y-2">
+                  <div className="h-12 w-[70%] animate-pulse rounded-2xl bg-secondary/60" />
+                  <div className="ml-auto h-12 w-[62%] animate-pulse rounded-2xl bg-blue-500/20" />
+                </div>
+              ) : messages.length === 0 ? (
+                <div className="rounded-xl border border-border/60 bg-background/50 p-3 text-sm text-muted-foreground">
+                  Send your first prompt to start generating files.
+                </div>
+              ) : null}
+
+              {messages.map((message) => (
+                <div
+                  key={message.id}
+                  className={`w-fit max-w-[92%] rounded-2xl px-4 py-2 text-sm leading-relaxed ${
+                    message.role === "user"
+                      ? "ml-auto bg-blue-500/90 text-white"
+                      : "border border-border/70 bg-background/70"
+                  }`}
+                >
+                  {message.role === "assistant" ? (
+                    message.content ? (
+                      <div className="prose prose-sm prose-invert max-w-none break-words prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 prose-headings:mb-2 prose-headings:mt-3 prose-pre:my-2 prose-pre:rounded-lg prose-pre:bg-neutral-900 prose-pre:p-3 prose-code:rounded prose-code:bg-neutral-800 prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[13px] prose-code:before:content-none prose-code:after:content-none">
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            pre: ({ children, ...props }) => (
+                              <pre className="overflow-x-auto rounded-lg bg-neutral-900 p-3 text-[13px] leading-relaxed" {...props}>
+                                {children}
+                              </pre>
+                            ),
+                            code: ({ children, className, ...props }) => {
+                              const isBlock = className?.startsWith("language-");
+                              return isBlock ? (
+                                <code className={className} {...props}>{children}</code>
+                              ) : (
+                                <code className="rounded bg-neutral-800 px-1.5 py-0.5 text-[13px] text-blue-300" {...props}>
+                                  {children}
+                                </code>
+                              );
+                            },
+                          }}
+                        >
+                          {message.content}
+                        </ReactMarkdown>
+                      </div>
+                    ) : (
+                      "Analyzing..."
+                    )
+                  ) : (
+                    message.content
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {isRunning && liveActivity.length > 0 ? (
+              <div className="rounded-xl border border-border/50 bg-background/40 p-2.5">
+                <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-muted-foreground/70">
+                  <span className="inline-block size-1.5 animate-pulse rounded-full bg-blue-400/80" />
+                  AI Activity
+                </div>
+                <div
+                  ref={activityFeedRef}
+                  className="max-h-36 space-y-0.5 overflow-y-auto"
+                >
+                  {liveActivity.map((entry) => (
+                    <div
+                      key={entry.id}
+                      className="flex items-baseline gap-1.5 py-px font-mono text-[11px] leading-snug text-muted-foreground/80"
+                    >
+                      <span className="shrink-0 select-none text-[10px] text-muted-foreground/40">
+                        {entry.kind === "reasoning" ? "💭" : entry.kind === "tool" ? "🔧" : entry.kind === "preview" ? "👁" : "•"}
+                      </span>
+                      <span className="min-w-0 truncate">{entry.text}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             ) : null}
-
-            {messages.map((message) => (
-              <div
-                key={message.id}
-                className={`w-fit max-w-[92%] rounded-2xl px-4 py-2 text-sm leading-relaxed ${
-                  message.role === "user"
-                    ? "ml-auto bg-blue-500/90 text-white"
-                    : "border border-border/70 bg-background/70"
-                }`}
-              >
-                {message.content || (message.role === "assistant" ? "Analyzing..." : "")}
-              </div>
-            ))}
 
             {bootstrapLogs.length > 0 && !previewUrl ? (
               <div className="rounded-xl border border-border/70 bg-background/60 p-3">

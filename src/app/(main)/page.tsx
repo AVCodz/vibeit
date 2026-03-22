@@ -117,6 +117,7 @@ export default function Home() {
       if (data.initialAssistantMessage?.id) {
         url.searchParams.set("amid", data.initialAssistantMessage.id);
       }
+      url.searchParams.set("autostart", "1");
 
       router.push(`${url.pathname}?${url.searchParams.toString()}`);
     } catch (error) {
