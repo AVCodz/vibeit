@@ -108,6 +108,21 @@ export const agentRuns = pgTable("agent_runs", {
   },
 );
 
+export const projectMessages = pgTable("project_messages", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  projectId: uuid("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  runId: uuid("run_id").references(() => agentRuns.id, {
+    onDelete: "set null",
+  }),
+  role: text("role").notNull(),
+  content: text("content").notNull().default(""),
+  status: text("status").notNull().default("completed"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const projectFiles = pgTable(
   "project_files",
   {

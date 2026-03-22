@@ -95,6 +95,8 @@ export default function Home() {
         projectId?: string;
         previewUrl?: string;
         projectName?: string;
+        initialUserMessage?: { id: string };
+        initialAssistantMessage?: { id: string };
       };
 
       if (!response.ok || !data.projectId) {
@@ -109,6 +111,12 @@ export default function Home() {
         url.searchParams.set("name", data.projectName);
       }
       url.searchParams.set("prompt", prompt);
+      if (data.initialUserMessage?.id) {
+        url.searchParams.set("umid", data.initialUserMessage.id);
+      }
+      if (data.initialAssistantMessage?.id) {
+        url.searchParams.set("amid", data.initialAssistantMessage.id);
+      }
 
       router.push(`${url.pathname}?${url.searchParams.toString()}`);
     } catch (error) {

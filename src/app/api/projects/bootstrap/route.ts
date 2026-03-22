@@ -1,7 +1,6 @@
 import { db } from "@/db";
-import { projectSessions, projects } from "@/db/schema";
+import { projectMessages, projects } from "@/db/schema";
 import { auth } from "@/lib/auth";
-import { bootstrapProjectBox } from "@/lib/upstash-box";
 
 type BootstrapProjectBody = {
   prompt?: string;
@@ -47,22 +46,42 @@ export async function POST(request: Request) {
         name: projects.name,
       });
 
-    const box = await bootstrapProjectBox({ projectId: project.id });
+    const [userMessage] = await db
+      .insert(projectMessages)
+      .values({
+        projectId: project.id,
+        role: "user",
+        content: prompt,
+        status: "completed",
+      })
+      .returning({
+        id: projectMessages.id,
+        role: projectMessages.role,
+        content: projectMessages.content,
+        status: projectMessages.status,
+      });
 
-    await db.insert(projectSessions).values({
-      projectId: project.id,
-      upstashBoxId: box.boxId,
-      previewUrl: box.previewUrl,
-      previewPort: box.previewPort,
-      sessionStatus: "ready",
-    });
+    const [assistantMessage] = await db
+      .insert(projectMessages)
+      .values({
+        projectId: project.id,
+        role: "assistant",
+        content: "",
+        status: "pending",
+      })
+      .returning({
+        id: projectMessages.id,
+        role: projectMessages.role,
+        content: projectMessages.content,
+        status: projectMessages.status,
+      });
 
     return Response.json({
       projectId: project.id,
       projectName: project.name,
-      previewUrl: box.previewUrl,
-      previewReachable: box.previewReachable,
       requestId,
+      initialUserMessage: userMessage,
+      initialAssistantMessage: assistantMessage,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to bootstrap project";

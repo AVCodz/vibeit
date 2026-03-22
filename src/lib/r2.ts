@@ -6,6 +6,7 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { Box } from "@upstash/box";
+import { createHash } from "node:crypto";
 
 const WORKDIR = "/workspace/home/work";
 const WORKSPACE_PREFIX = "workspace";
@@ -73,23 +74,34 @@ async function listBoxFilesRecursive(box: Box, path = ""): Promise<string[]> {
   const files: string[] = [];
 
   for (const entry of entries) {
-    const entryPath = normalizePath(entry.path);
+    const entryPath = path ? `${path}/${entry.name}` : entry.name;
+    const normalizedEntryPath = normalizePath(entryPath);
 
-    if (isIgnoredPath(entryPath)) {
+    if (isIgnoredPath(normalizedEntryPath)) {
       continue;
     }
 
     if (entry.is_dir) {
-      const nested = await listBoxFilesRecursive(box, entryPath);
+      const nested = await listBoxFilesRecursive(box, normalizedEntryPath);
       files.push(...nested);
       continue;
     }
 
-    files.push(entryPath);
+    files.push(normalizedEntryPath);
   }
 
   return files;
 }
+
+function createChecksum(content: string) {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+type SyncedFile = {
+  path: string;
+  sizeBytes: number;
+  checksum: string;
+};
 
 async function listR2Keys(prefix: string) {
   const client = getR2Client();
@@ -136,10 +148,13 @@ export async function syncProjectWorkspaceToR2(params: { box: Box; r2Prefix: str
   await box.cd(WORKDIR);
   const filePaths = await listBoxFilesRecursive(box);
   const uploadedKeys = new Set<string>();
+  const syncedFiles: SyncedFile[] = [];
 
   for (const filePath of filePaths) {
     const content = await box.files.read(filePath);
     const key = toWorkspaceKey(r2Prefix, filePath);
+    const sizeBytes = Buffer.byteLength(content, "utf8");
+    const checksum = createChecksum(content);
 
     await client.send(
       new PutObjectCommand({
@@ -151,6 +166,11 @@ export async function syncProjectWorkspaceToR2(params: { box: Box; r2Prefix: str
     );
 
     uploadedKeys.add(key);
+    syncedFiles.push({
+      path: filePath,
+      sizeBytes,
+      checksum,
+    });
   }
 
   const existingKeys = await listR2Keys(`${r2Prefix}/${WORKSPACE_PREFIX}/`);
@@ -175,6 +195,11 @@ export async function syncProjectWorkspaceToR2(params: { box: Box; r2Prefix: str
       Body: JSON.stringify({
         syncedAt: new Date().toISOString(),
         fileCount: filePaths.length,
+        files: syncedFiles.map((file) => ({
+          path: file.path,
+          sizeBytes: file.sizeBytes,
+          checksum: file.checksum,
+        })),
       }),
       ContentType: "application/json",
     }),
@@ -182,6 +207,7 @@ export async function syncProjectWorkspaceToR2(params: { box: Box; r2Prefix: str
 
   return {
     fileCount: filePaths.length,
+    files: syncedFiles,
   };
 }
 

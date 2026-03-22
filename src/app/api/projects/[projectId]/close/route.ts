@@ -1,5 +1,6 @@
 import { query } from "@/db";
 import { auth } from "@/lib/auth";
+import { syncProjectFilesMetadata } from "@/lib/project-files";
 import { capturePreviewThumbnail, syncProjectWorkspaceToR2, uploadProjectThumbnail } from "@/lib/r2";
 import { getBoxById } from "@/lib/upstash-box";
 
@@ -80,6 +81,10 @@ export async function POST(
     const syncResult = await syncProjectWorkspaceToR2({
       box,
       r2Prefix: project.r2_prefix,
+    });
+    await syncProjectFilesMetadata({
+      projectId: project.id,
+      files: syncResult.files,
     });
     fileCount = syncResult.fileCount;
 
