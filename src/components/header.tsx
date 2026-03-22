@@ -54,10 +54,43 @@ export function Header() {
         <div className="hidden items-center gap-2 md:flex">
           {isPending ? null : session ? (
             <details className="relative">
-              <summary className="list-none cursor-pointer rounded-full border border-border/60 px-3 py-1.5 text-sm text-foreground">
-                {session.user.name ?? session.user.email}
+              <summary className="list-none cursor-pointer rounded-md border border-border/60 bg-secondary px-2 py-1 text-sm text-foreground">
+                <span className="flex items-center gap-2">
+                  {session.user.image ? (
+                    <Image
+                      src={session.user.image}
+                      alt={session.user.name ?? "User avatar"}
+                      width={24}
+                      height={24}
+                      className="size-6 rounded-md border border-border/60 bg-secondary object-cover"
+                    />
+                  ) : (
+                    <span className="flex size-6 items-center justify-center rounded-md border border-border/60 bg-secondary bg-muted text-[10px] font-semibold uppercase text-muted-foreground">
+                      {(session.user.name ?? session.user.email ?? "U").charAt(0)}
+                    </span>
+                  )}
+                  <span className="max-w-32 truncate">{session.user.name ?? session.user.email}</span>
+                </span>
               </summary>
-              <div className="absolute right-0 mt-2 w-52 rounded-lg border border-border/60 bg-card p-2 shadow-xl">
+              <div className="absolute right-0 mt-2 w-52 rounded-md border border-border/60 bg-secondary bg-card p-2 shadow-xl">
+                <div className="mb-1 flex items-center gap-2 px-2 py-1">
+                  {session.user.image ? (
+                    <Image
+                      src={session.user.image}
+                      alt={session.user.name ?? "User avatar"}
+                      width={28}
+                      height={28}
+                      className="size-7 rounded-md border border-border/60 bg-secondary object-cover"
+                    />
+                  ) : (
+                    <span className="flex size-7 items-center justify-center rounded-md border border-border/60 bg-secondary bg-muted text-[10px] font-semibold uppercase text-muted-foreground">
+                      {(session.user.name ?? session.user.email ?? "U").charAt(0)}
+                    </span>
+                  )}
+                  <p className="max-w-[140px] truncate text-xs text-muted-foreground">
+                    {session.user.name ?? "VibeIt user"}
+                  </p>
+                </div>
                 <p className="truncate px-2 py-1 text-xs text-muted-foreground">
                   {session.user.email}
                 </p>
@@ -136,9 +169,25 @@ export function Header() {
             <div className="mt-auto space-y-2">
               {isPending ? null : session ? (
                 <>
-                  <p className="truncate rounded-md border border-border/60 px-3 py-2 text-xs text-muted-foreground">
-                    {session.user.email}
-                  </p>
+                  <div className="flex items-center gap-2 rounded-md border border-border/60 bg-secondary px-3 py-2">
+                    {session.user.image ? (
+                      <Image
+                        src={session.user.image}
+                        alt={session.user.name ?? "User avatar"}
+                        width={24}
+                        height={24}
+                        className="size-6 rounded-md border border-border/60 bg-secondary object-cover"
+                      />
+                    ) : (
+                      <span className="flex size-6 items-center justify-center rounded-md border border-border/60 bg-secondary bg-muted text-[10px] font-semibold uppercase text-muted-foreground">
+                        {(session.user.name ?? session.user.email ?? "U").charAt(0)}
+                      </span>
+                    )}
+                    <div className="min-w-0">
+                      <p className="truncate text-xs text-foreground">{session.user.name ?? "VibeIt user"}</p>
+                      <p className="truncate text-[11px] text-muted-foreground">{session.user.email}</p>
+                    </div>
+                  </div>
                   <Button
                     variant="ghost"
                     className="w-full justify-start"
