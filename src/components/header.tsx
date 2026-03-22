@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import Image from "next/image";
 import { HiBars3, HiXMark } from "react-icons/hi2";
+import { signOut, useSession } from "@/lib/auth-client";
 
 const navLinks = [
   { href: "/features", label: "Features" },
@@ -17,6 +18,7 @@ const navLinks = [
 export function Header() {
   const pathname = usePathname();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const { data: session, isPending } = useSession();
 
   const closeMobileMenu = () => setIsMobileMenuOpen(false);
 
@@ -50,9 +52,30 @@ export function Header() {
         </nav>
 
         <div className="hidden items-center gap-2 md:flex">
-          <Button size="sm" asChild>
-            <Link href="/auth">Register</Link>
-          </Button>
+          {isPending ? null : session ? (
+            <details className="relative">
+              <summary className="list-none cursor-pointer rounded-full border border-border/60 px-3 py-1.5 text-sm text-foreground">
+                {session.user.name ?? session.user.email}
+              </summary>
+              <div className="absolute right-0 mt-2 w-52 rounded-lg border border-border/60 bg-card p-2 shadow-xl">
+                <p className="truncate px-2 py-1 text-xs text-muted-foreground">
+                  {session.user.email}
+                </p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="mt-1 w-full justify-start"
+                  onClick={() => signOut()}
+                >
+                  Sign out
+                </Button>
+              </div>
+            </details>
+          ) : (
+            <Button size="sm" asChild>
+              <Link href="/auth">Get started</Link>
+            </Button>
+          )}
         </div>
 
         <div className="md:hidden">
@@ -111,11 +134,29 @@ export function Header() {
             </nav>
 
             <div className="mt-auto space-y-2">
-              <Button className="w-full" asChild>
-                <Link href="/auth" onClick={closeMobileMenu}>
-                  Register
-                </Link>
-              </Button>
+              {isPending ? null : session ? (
+                <>
+                  <p className="truncate rounded-md border border-border/60 px-3 py-2 text-xs text-muted-foreground">
+                    {session.user.email}
+                  </p>
+                  <Button
+                    variant="ghost"
+                    className="w-full justify-start"
+                    onClick={() => {
+                      signOut();
+                      closeMobileMenu();
+                    }}
+                  >
+                    Sign out
+                  </Button>
+                </>
+              ) : (
+                <Button className="w-full" asChild>
+                  <Link href="/auth" onClick={closeMobileMenu}>
+                    Get started
+                  </Link>
+                </Button>
+              )}
             </div>
           </aside>
         </div>

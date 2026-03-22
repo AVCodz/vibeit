@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -12,10 +13,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
+import { FaChevronLeft } from "react-icons/fa";
+import { FaGoogle } from "react-icons/fa6";
 import { HiPaperClip, HiLightBulb } from "react-icons/hi2";
 import { IoSend } from "react-icons/io5";
-import { FaGoogle, FaGithub, FaChevronLeft } from "react-icons/fa";
+import { signIn, useSession } from "@/lib/auth-client";
 
 const PROMPT_PREFIX = "Ask VibeIt to ";
 const PROMPT_SUFFIXES = [
@@ -26,10 +28,21 @@ const PROMPT_SUFFIXES = [
 ];
 
 export default function AuthPage() {
+  const router = useRouter();
+  const { data: session, isPending: isSessionPending } = useSession();
+
   const [planActive, setPlanActive] = useState(false);
   const [promptIndex, setPromptIndex] = useState(0);
   const [displayedText, setDisplayedText] = useState("");
   const [isDeleting, setIsDeleting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!isSessionPending && session?.user) {
+      router.replace("/");
+    }
+  }, [isSessionPending, router, session]);
 
   useEffect(() => {
     const currentPrompt = PROMPT_SUFFIXES[promptIndex];
@@ -67,6 +80,25 @@ export default function AuthPage() {
     return () => clearTimeout(timeout);
   }, [displayedText, isDeleting, promptIndex]);
 
+  const handleGoogleAuth = async () => {
+    setErrorMessage("");
+    setIsSubmitting(true);
+
+    try {
+      const { error } = await signIn.social({
+        provider: "google",
+        callbackURL: "/",
+      });
+
+      if (error) {
+        setErrorMessage(error.message ?? "Unable to continue with Google.");
+        return;
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   return (
     <div className="grid min-h-screen w-full lg:grid-cols-2">
       <div className="relative hidden border-r border-border bg-background lg:flex lg:flex-col lg:justify-between lg:p-12">
@@ -89,7 +121,7 @@ export default function AuthPage() {
             Create something extraordinary today.
           </h1>
 
-          <div className="mt-10 w-full max-w-3xl ">
+          <div className="mt-10 w-full max-w-3xl">
             <div className="rounded-2xl border border-border/50 bg-background/20 p-4">
               <textarea
                 value={`${PROMPT_PREFIX}${displayedText}`}
@@ -126,7 +158,6 @@ export default function AuthPage() {
         </div>
       </div>
 
-      {/* Right Panel */}
       <div className="relative flex h-full flex-col items-center justify-center bg-background p-8 lg:p-12">
         <Link
           href="/"
@@ -141,45 +172,31 @@ export default function AuthPage() {
             <CardHeader className="space-y-1 text-center">
               <CardTitle className="text-2xl font-bold tracking-tight">Create your account</CardTitle>
               <CardDescription>
-                Connect your professional identity to get started
+                Continue with Google to start building with VibeIt
               </CardDescription>
             </CardHeader>
 
-            <CardContent className="grid gap-6">
-              <div className="relative">
-                <div className="absolute inset-0 flex items-center">
-                  <Separator />
-                </div>
-                <div className="relative flex justify-center text-xs uppercase">
-                  <span className=" px-2 text-muted-foreground">
-                    Continue with
-                  </span>
-                </div>
-              </div>
-
+            <CardContent>
               <div className="grid gap-3">
-                <Button  className="relative h-11 bg-foreground hover:bg-foreground/90 w-full font-medium transition-all  hover:text-background">
-                  <FaGoogle className=" size-4 text-background" />
-                  <span>Continue with Google</span>
+                <Button
+                  type="button"
+                  className="h-11 w-full bg-foreground font-medium text-background transition-all hover:bg-foreground/90"
+                  disabled={isSubmitting}
+                  onClick={handleGoogleAuth}
+                >
+                  <FaGoogle className="size-4" />
+                  <span>{isSubmitting ? "Please wait..." : "Continue with Google"}</span>
                 </Button>
-                <Button  className="relative h-11 bg-foreground hover:bg-foreground/90 w-full font-medium transition-all  hover:text-background">
-                  <FaGithub className=" size-4 text-background" />
-                  <span> Continue with GitHub</span>
-                </Button>
+
+                {errorMessage ? (
+                  <p className="text-sm text-red-400">{errorMessage}</p>
+                ) : null}
               </div>
             </CardContent>
 
             <CardFooter>
               <p className="w-full text-center text-xs text-muted-foreground">
-                By clicking continue, you agree to our{" "}
-                <Link href="#" className="underline underline-offset-4 hover:text-primary">
-                  Terms of Service
-                </Link>{" "}
-                and{" "}
-                <Link href="#" className="underline underline-offset-4 hover:text-primary">
-                  Privacy Policy
-                </Link>
-                .
+                By continuing, you agree to our Terms and Privacy Policy.
               </p>
             </CardFooter>
           </Card>

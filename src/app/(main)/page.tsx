@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { DottedSurface } from "@/components/ui/dotted-surface";
 import { HiPaperClip, HiLightBulb } from "react-icons/hi2";
 import { IoSend } from "react-icons/io5";
+import { useRouter } from "next/navigation";
 
 const PROMPT_PREFIX = "Ask VibeIt to ";
 const PROMPT_SUFFIXES = [
@@ -16,6 +17,9 @@ const PROMPT_SUFFIXES = [
 
 export default function Home() {
   const [planActive, setPlanActive] = useState(false);
+  const [promptValue, setPromptValue] = useState("");
+  const hasNavigatedRef = useRef(false);
+  const router = useRouter();
 
   const [promptIndex, setPromptIndex] = useState(0);
   const [displayedText, setDisplayedText] = useState("");
@@ -82,9 +86,19 @@ export default function Home() {
       <div className="animate-fade-up mt-10 w-full max-w-3xl mb-16 opacity-0 [animation-delay:800ms]">
         <div className="rounded-2xl border border-border/50 bg-card p-5">
           <textarea
+            value={promptValue}
             placeholder={`${PROMPT_PREFIX}${displayedText}`}
             className="min-h-[120px] w-full resize-none bg-transparent text-md text-foreground placeholder:text-muted-foreground focus:outline-none"
             rows={4}
+            onChange={(event) => {
+              const nextValue = event.target.value;
+              setPromptValue(nextValue);
+
+              if (!hasNavigatedRef.current && nextValue.trim().length > 0) {
+                hasNavigatedRef.current = true;
+                router.push("/auth");
+              }
+            }}
           />
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1">
