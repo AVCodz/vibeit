@@ -58,7 +58,7 @@ export async function POST(
     upstash_box_id: string | null;
     preview_url: string | null;
   }>(
-    "select id, upstash_box_id, preview_url from project_sessions where project_id = $1 order by created_at desc limit 1",
+    "select id, upstash_box_id, preview_url from project_sessions where project_id = $1 and session_status in ('bootstrapped', 'starting_preview', 'ready') order by created_at desc limit 1",
     [project.id],
   );
 
@@ -148,8 +148,21 @@ export async function POST(
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      let streamClosed = false;
+
       const push = (event: string, data: unknown) => {
-        controller.enqueue(encoder.encode(sseEvent(event, data)));
+        if (streamClosed) return;
+        try {
+          controller.enqueue(encoder.encode(sseEvent(event, data)));
+        } catch {
+          streamClosed = true;
+        }
+      };
+
+      const closeStream = () => {
+        if (streamClosed) return;
+        streamClosed = true;
+        try { controller.close(); } catch { /* already closed */ }
       };
 
       void (async () => {
@@ -210,13 +223,31 @@ export async function POST(
 
           const agentStream = await box.agent.stream({ prompt: runtimePrompt });
 
+          let dbFlushTimer: ReturnType<typeof setTimeout> | null = null;
+          let dbFlushNeeded = false;
+
+          const flushContentToDb = async () => {
+            if (!dbFlushNeeded) return;
+            dbFlushNeeded = false;
+            await query(
+              "update project_messages set content = $1, status = $2, updated_at = $3 where id = $4",
+              [assistantContent, "streaming", new Date(), assistantMessage.id],
+            );
+          };
+
+          const scheduleDbFlush = () => {
+            dbFlushNeeded = true;
+            if (dbFlushTimer) return;
+            dbFlushTimer = setTimeout(() => {
+              dbFlushTimer = null;
+              void flushContentToDb();
+            }, 300);
+          };
+
           for await (const chunk of agentStream) {
             if (chunk.type === "text-delta") {
               assistantContent += chunk.text;
-              await query(
-                "update project_messages set content = $1, status = $2, updated_at = $3 where id = $4",
-                [assistantContent, "streaming", new Date(), assistantMessage.id],
-              );
+              scheduleDbFlush();
               push("run.text", { text: chunk.text });
               continue;
             }
@@ -226,8 +257,21 @@ export async function POST(
               continue;
             }
 
+            if (chunk.type === "start") {
+              push("run.agent-started", { runId: chunk.runId });
+              continue;
+            }
+
             if (chunk.type === "tool-call") {
-              push("run.tool", { name: chunk.toolName, input: chunk.input });
+              const truncatedInput: Record<string, unknown> = {};
+              for (const [key, value] of Object.entries(chunk.input)) {
+                if (typeof value === "string" && value.length > 500) {
+                  truncatedInput[key] = value.slice(0, 500) + "…";
+                } else {
+                  truncatedInput[key] = value;
+                }
+              }
+              push("run.tool", { name: chunk.toolName, input: truncatedInput });
               continue;
             }
 
@@ -244,24 +288,28 @@ export async function POST(
                 assistantContent = chunk.output;
               }
 
-              await query(
-                "update project_messages set content = $1, status = $2, updated_at = $3 where id = $4",
-                [assistantContent, "completed", new Date(), assistantMessage.id],
-              );
-
               push("run.finished", {
                 output: assistantContent,
                 usage: chunk.usage,
                 sessionId: chunk.sessionId,
                 assistantMessageId: assistantMessage.id,
               });
+
+              void query(
+                "update project_messages set content = $1, status = $2, updated_at = $3 where id = $4",
+                [assistantContent, "completed", new Date(), assistantMessage.id],
+              );
             }
           }
 
-          await query(
-            "update agent_runs set status = $1, completed_at = $2 where id = $3",
-            ["completed", new Date(), run.id],
-          );
+          if (dbFlushTimer) clearTimeout(dbFlushTimer);
+          await Promise.all([
+            flushContentToDb(),
+            query(
+              "update agent_runs set status = $1, completed_at = $2 where id = $3",
+              ["completed", new Date(), run.id],
+            ),
+          ]);
 
           if (mode === "build") {
             const sessionStateResult = await query<{
@@ -376,7 +424,7 @@ export async function POST(
           await renameProjectPromise;
 
           push("run.completed", { runId: run.id });
-          controller.close();
+          closeStream();
         } catch (error) {
           await renameProjectPromise;
 
@@ -408,7 +456,7 @@ export async function POST(
             runId: run.id,
             error: error instanceof Error ? error.message : "Unknown run failure",
           });
-          controller.close();
+          closeStream();
         }
       })();
     },
@@ -419,6 +467,7 @@ export async function POST(
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
     },
   });
 }

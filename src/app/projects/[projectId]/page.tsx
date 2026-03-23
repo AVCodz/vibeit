@@ -4,6 +4,8 @@ import Editor from "@monaco-editor/react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
+import { AgentStatusLoader } from "@/components/ui/agent-status-loader";
+import type { AgentPhase } from "@/components/ui/agent-status-loader";
 import { cn } from "@/lib/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
@@ -62,24 +64,53 @@ type FileNode = {
   children: FileNode[];
 };
 
-type ActivityEntryKind = "reasoning" | "tool" | "preview" | "status";
-
-type LiveActivityEntry = {
-  id: string;
-  text: string;
-  kind: ActivityEntryKind;
-  timestamp: number;
-};
-
-const ACTIVITY_FEED_MAX = 30;
 const PROJECT_UI_CACHE_VERSION = 1;
 const PROJECT_UI_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
 
 const FILE_WRITE_VERBS = ["write", "edit", "create", "update", "overwrite", "patch", "save"];
 
-function truncateText(text: string, maxLength: number) {
-  if (text.length <= maxLength) return text;
-  return `${text.slice(0, maxLength)}…`;
+const ANSI = {
+  reset: "\x1b[0m",
+  bold: "\x1b[1m",
+  dim: "\x1b[2m",
+  red: "\x1b[31m",
+  green: "\x1b[32m",
+  yellow: "\x1b[33m",
+  blue: "\x1b[34m",
+  magenta: "\x1b[35m",
+  cyan: "\x1b[36m",
+  gray: "\x1b[90m",
+  brightGreen: "\x1b[92m",
+  brightCyan: "\x1b[96m",
+  brightWhite: "\x1b[97m",
+} as const;
+
+function colorizeTerminalLine(raw: string): string {
+  if (raw.startsWith("[error]")) {
+    return `${ANSI.red}${ANSI.bold}✗${ANSI.reset} ${ANSI.red}${raw.slice(7).trim()}${ANSI.reset}`;
+  }
+  if (raw.startsWith("[tool]")) {
+    return `${ANSI.cyan}⚡${ANSI.reset} ${ANSI.brightCyan}${raw.slice(6).trim()}${ANSI.reset}`;
+  }
+  if (raw.startsWith("[preview]")) {
+    return `${ANSI.magenta}◉${ANSI.reset} ${ANSI.magenta}${raw.slice(9).trim()}${ANSI.reset}`;
+  }
+  if (raw.startsWith("Synced")) {
+    return `${ANSI.green}✓${ANSI.reset} ${ANSI.green}${raw}${ANSI.reset}`;
+  }
+  if (raw.startsWith("Run ") && raw.includes("started")) {
+    return `${ANSI.bold}${ANSI.brightGreen}▶ ${raw}${ANSI.reset}`;
+  }
+  if (raw.toLowerCase().includes("installing") || raw.toLowerCase().includes("resolving")) {
+    return `${ANSI.yellow}⏳${ANSI.reset} ${ANSI.yellow}${raw}${ANSI.reset}`;
+  }
+  if (raw.toLowerCase().includes("ready") || raw.toLowerCase().includes("complete")) {
+    return `${ANSI.green}✓${ANSI.reset} ${ANSI.green}${raw}${ANSI.reset}`;
+  }
+  if (raw.toLowerCase().includes("building") || raw.toLowerCase().includes("compiling") || raw.toLowerCase().includes("starting")) {
+    return `${ANSI.blue}⟳${ANSI.reset} ${ANSI.blue}${raw}${ANSI.reset}`;
+  }
+  return `${ANSI.gray}│${ANSI.reset} ${raw}`;
 }
 
 function parseToolActivity(toolName: string, input: unknown): string {
@@ -97,6 +128,27 @@ function parseToolActivity(toolName: string, input: unknown): string {
   }
 
   return `Tool: ${toolName}`;
+}
+
+function deriveToolPhase(toolName: string, input: unknown): AgentPhase {
+  const name = toolName.toLowerCase();
+  const inputObj = (input && typeof input === "object") ? input as Record<string, unknown> : null;
+  const commandCandidates = [inputObj?.command, inputObj?.cmd, inputObj?.script, inputObj?.text]
+    .filter((v): v is string => typeof v === "string")
+    .join(" ")
+    .toLowerCase();
+
+  if (name.includes("bash") || name.includes("command") || name.includes("shell")) {
+    if (["npm install", "npm i", "pnpm install", "pnpm add", "yarn add", "bun install", "bun add"].some((cmd) => commandCandidates.includes(cmd))) {
+      return "installing";
+    }
+  }
+
+  if (FILE_WRITE_VERBS.some((verb) => name.includes(verb))) {
+    return "editing";
+  }
+
+  return "thinking";
 }
 
 function toolEventRequiresPreviewReload(toolName: string, input: unknown) {
@@ -343,6 +395,8 @@ export default function ProjectWorkspacePage() {
   const [terminalLogs, setTerminalLogs] = useState<string[]>([]);
   const [activity, setActivity] = useState("Ready");
   const [isRunning, setIsRunning] = useState(false);
+  const [agentPhase, setAgentPhase] = useState<AgentPhase>("analyzing");
+  const [agentDetail, setAgentDetail] = useState("");
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [isOpening, setIsOpening] = useState(false);
   const [isWorkspaceReady, setIsWorkspaceReady] = useState(false);
@@ -359,8 +413,7 @@ export default function ProjectWorkspacePage() {
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({
     src: true,
   });
-  const [liveActivity, setLiveActivity] = useState<LiveActivityEntry[]>([]);
-  const activityFeedRef = useRef<HTMLDivElement>(null);
+
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const terminalContainerRef = useRef<HTMLDivElement>(null);
@@ -443,7 +496,7 @@ export default function ProjectWorkspacePage() {
     if (xtermRef.current) {
       xtermRef.current.clear();
       if (title) {
-        xtermRef.current.writeln(title);
+        xtermRef.current.writeln(colorizeTerminalLine(title));
       }
     }
   }, []);
@@ -605,22 +658,7 @@ export default function ProjectWorkspacePage() {
     [projectId],
   );
 
-  const pushActivityEntry = useCallback((text: string, kind: ActivityEntryKind) => {
-    setLiveActivity((current) => {
-      const entry: LiveActivityEntry = {
-        id: randomId(),
-        text,
-        kind,
-        timestamp: Date.now(),
-      };
-      const next = [...current, entry];
-      return next.length > ACTIVITY_FEED_MAX ? next.slice(-ACTIVITY_FEED_MAX) : next;
-    });
-  }, []);
 
-  const clearActivityFeed = useCallback(() => {
-    setLiveActivity([]);
-  }, []);
 
   const appendAssistantText = useCallback((messageId: string, text: string) => {
     setMessages((current) =>
@@ -708,6 +746,8 @@ export default function ProjectWorkspacePage() {
 
     setIsRunning(true);
     setActivity("Analyzing...");
+    setAgentPhase("analyzing");
+    setAgentDetail("");
 
     const existingMessageIds = options?.existingMessageIds;
     const tempUserMessageId = existingMessageIds ? existingMessageIds.userId : `temp-user-${randomId()}`;
@@ -839,7 +879,8 @@ export default function ProjectWorkspacePage() {
             if (eventName === "preview.status") {
               if (typeof payload.message === "string" && payload.message.length > 0) {
                 setActivity(payload.message);
-                pushActivityEntry(payload.message, "preview");
+                setAgentPhase("preview");
+                setAgentDetail(payload.message);
                 pushTerminalLog(payload.message);
               }
               continue;
@@ -848,6 +889,7 @@ export default function ProjectWorkspacePage() {
             if (eventName === "preview.ready") {
               if (typeof payload.previewUrl === "string" && payload.previewUrl.length > 0) {
                 setPreviewUrlWithRoute(payload.previewUrl);
+                setAgentDetail(payload.previewUrl);
               }
               setActivity("Preview ready");
               continue;
@@ -866,24 +908,23 @@ export default function ProjectWorkspacePage() {
               appendAssistantText(assistantMessageId, payload.text);
             }
             setActivity("Generating...");
+            setAgentPhase("generating");
             continue;
           }
 
           if (eventName === "run.reasoning") {
             setActivity("Thinking...");
-            if (typeof payload.text === "string" && payload.text.trim().length > 0) {
-              pushActivityEntry(`Thinking: ${truncateText(payload.text.trim(), 120)}`, "reasoning");
-            } else {
-              pushActivityEntry("Thinking…", "reasoning");
-            }
+            setAgentPhase("thinking");
+            setAgentDetail("");
             continue;
           }
 
           if (eventName === "run.tool") {
             if (typeof payload.name === "string") {
               setActivity(`Tool: ${payload.name}`);
+              setAgentPhase(deriveToolPhase(payload.name, payload.input));
               const toolSummary = parseToolActivity(payload.name, payload.input);
-              pushActivityEntry(toolSummary, "tool");
+              setAgentDetail(toolSummary);
               pushTerminalLog(`[tool] ${toolSummary}`);
 
               if (!shouldForcePreviewReload && toolEventRequiresPreviewReload(payload.name, payload.input)) {
@@ -916,7 +957,8 @@ export default function ProjectWorkspacePage() {
                 ),
               );
             }
-              clearActivityFeed();
+              setAgentDetail("");
+              setAgentPhase("idle");
               if (runMode === "build" && shouldForcePreviewReload && previewUrl) {
                 setPreviewNonce((value) => value + 1);
                 pushTerminalLog("[preview] Reloaded after dependency/config updates.");
@@ -938,7 +980,8 @@ export default function ProjectWorkspacePage() {
                   : message,
               ),
             );
-            clearActivityFeed();
+            setAgentDetail("");
+            setAgentPhase("idle");
             setActivity("Run failed");
             if (typeof payload.error === "string" && payload.error.length > 0) {
               pushTerminalLog(`[error] ${payload.error}`);
@@ -961,7 +1004,7 @@ export default function ProjectWorkspacePage() {
             : message,
         ),
       );
-      clearActivityFeed();
+      setAgentDetail("");
       setActivity(error instanceof Error ? error.message : "Run failed");
       pushTerminalLog(error instanceof Error ? `[error] ${error.message}` : "[error] Run failed");
     } finally {
@@ -969,7 +1012,7 @@ export default function ProjectWorkspacePage() {
       setInitialMessageIds(null);
       setActiveRunId(null);
     }
-  }, [appendAssistantText, applyProjectName, clearActivityFeed, isWorkspaceReady, loadFiles, loadMessages, previewUrl, projectId, pushActivityEntry, pushTerminalLog, resetTerminalLogs, runMode, setPreviewUrlWithRoute, upsertFileFromToolInput]);
+  }, [appendAssistantText, applyProjectName, isWorkspaceReady, loadFiles, loadMessages, previewUrl, projectId, pushTerminalLog, resetTerminalLogs, runMode, setPreviewUrlWithRoute, upsertFileFromToolInput]);
 
   const handleEnhancePrompt = async () => {
     const prompt = chatInput.trim();
@@ -1279,7 +1322,8 @@ export default function ProjectWorkspacePage() {
     }
 
     void loadMessages({ silent: messages.length > 0 });
-  }, [loadMessages, messages.length, projectId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Only load messages on mount/projectId change, not on every messages update
+  }, [loadMessages, projectId]);
 
   useEffect(() => {
     if (!selectedFile || selectedFile.isDir || typeof selectedFile.content === "string") {
@@ -1291,11 +1335,7 @@ export default function ProjectWorkspacePage() {
     });
   }, [loadFileContent, selectedFile]);
 
-  useEffect(() => {
-    if (activityFeedRef.current) {
-      activityFeedRef.current.scrollTop = activityFeedRef.current.scrollHeight;
-    }
-  }, [liveActivity]);
+
 
   const scrollChatToBottom = useCallback(() => {
     chatScrollRef.current?.scrollTo({
@@ -1346,13 +1386,35 @@ export default function ProjectWorkspacePage() {
       const term = new Terminal({
         convertEol: true,
         cursorBlink: false,
+        cursorStyle: "underline",
         disableStdin: true,
-        fontFamily: "var(--font-geist-mono)",
+        fontFamily: "var(--font-geist-mono), Menlo, Monaco, 'Courier New', monospace",
         fontSize: 12,
-        lineHeight: 1.35,
+        lineHeight: 1.4,
+        scrollback: 1000,
         theme: {
-          background: "#0b0d10",
-          foreground: "#d6d8df",
+          background: "#090a0a",
+          foreground: "#c9d1d9",
+          cursor: "#58a6ff",
+          cursorAccent: "#0b0d10",
+          selectionBackground: "#264f78",
+          selectionForeground: "#ffffff",
+          black: "#484f58",
+          red: "#ff7b72",
+          green: "#7ee787",
+          yellow: "#d29922",
+          blue: "#58a6ff",
+          magenta: "#bc8cff",
+          cyan: "#76e3ea",
+          white: "#c9d1d9",
+          brightBlack: "#6e7681",
+          brightRed: "#ffa198",
+          brightGreen: "#aff5b4",
+          brightYellow: "#e3b341",
+          brightBlue: "#79c0ff",
+          brightMagenta: "#d2a8ff",
+          brightCyan: "#a5d6ff",
+          brightWhite: "#f0f6fc",
         },
       });
 
@@ -1360,7 +1422,7 @@ export default function ProjectWorkspacePage() {
       term.loadAddon(fitAddon);
       term.open(terminalContainerRef.current);
       fitAddon.fit();
-      term.writeln("VibeIt terminal ready");
+      term.writeln(`${ANSI.bold}${ANSI.brightGreen}⚡ VibeIt Terminal${ANSI.reset} ${ANSI.gray}— ready${ANSI.reset}`);
 
       xtermRef.current = term;
       fitAddonRef.current = fitAddon;
@@ -1393,7 +1455,7 @@ export default function ProjectWorkspacePage() {
     }
 
     for (const line of newLines) {
-      xtermRef.current.writeln(line);
+      xtermRef.current.writeln(colorizeTerminalLine(line));
     }
 
     terminalCursorRef.current = terminalLogs.length;
@@ -1463,6 +1525,23 @@ export default function ProjectWorkspacePage() {
                         <ReactMarkdown
                           remarkPlugins={[remarkGfm]}
                           components={{
+                            table: ({ children, ...props }) => (
+                              <div className="my-2 w-full overflow-x-auto">
+                                <table className="min-w-max border-collapse border border-border/70 text-left text-sm" {...props}>
+                                  {children}
+                                </table>
+                              </div>
+                            ),
+                            th: ({ children, ...props }) => (
+                              <th className="border border-border/70 px-3 py-2 font-semibold whitespace-nowrap" {...props}>
+                                {children}
+                              </th>
+                            ),
+                            td: ({ children, ...props }) => (
+                              <td className="border border-border/70 px-3 py-2 align-top whitespace-nowrap" {...props}>
+                                {children}
+                              </td>
+                            ),
                             pre: ({ children, ...props }) => (
                               <pre className="overflow-x-auto rounded-lg bg-neutral-900 p-3 text-[13px] leading-relaxed" {...props}>
                                 {children}
@@ -1484,13 +1563,30 @@ export default function ProjectWorkspacePage() {
                         </ReactMarkdown>
                       </div>
                     ) : (
-                      "Analyzing..."
+                      <AgentStatusLoader phase={agentPhase} detail={agentDetail} className="py-0.5 text-sm" />
                     )
                   ) : (
                     <div className="prose prose-sm prose-invert max-w-none break-words text-white prose-p:my-1.5 prose-p:text-white prose-ul:my-1.5 prose-ul:text-white prose-ol:my-1.5 prose-ol:text-white prose-li:my-0.5 prose-li:text-white prose-li:marker:text-white prose-headings:mb-2 prose-headings:mt-3 prose-headings:text-white prose-strong:text-white prose-pre:my-2 prose-pre:rounded-lg prose-pre:bg-blue-900/40 prose-pre:p-3 prose-code:rounded prose-code:bg-blue-900/30 prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[13px] prose-code:text-white prose-code:before:content-none prose-code:after:content-none">
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
                         components={{
+                          table: ({ children, ...props }) => (
+                            <div className="my-2 w-full overflow-x-auto">
+                              <table className="min-w-max border-collapse border border-white/40 text-left text-sm" {...props}>
+                                {children}
+                              </table>
+                            </div>
+                          ),
+                          th: ({ children, ...props }) => (
+                            <th className="border border-white/40 px-3 py-2 font-semibold whitespace-nowrap" {...props}>
+                              {children}
+                            </th>
+                          ),
+                          td: ({ children, ...props }) => (
+                            <td className="border border-white/20 px-3 py-2 align-top whitespace-nowrap" {...props}>
+                              {children}
+                            </td>
+                          ),
                           pre: ({ children, ...props }) => (
                             <pre className="overflow-x-auto rounded-lg bg-blue-900/40 p-3 text-[13px] leading-relaxed" {...props}>
                               {children}
@@ -1525,31 +1621,6 @@ export default function ProjectWorkspacePage() {
               >
                 <HiArrowDown className="size-4 text-muted-foreground" />
               </button>
-            ) : null}
-
-            {isRunning && liveActivity.length > 0 ? (
-              <div className="rounded-xl border border-border/50 bg-background/40 p-2.5">
-                <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-muted-foreground/70">
-                  <span className="inline-block size-1.5 animate-pulse rounded-full bg-blue-400/80" />
-                  AI Activity
-                </div>
-                <div
-                  ref={activityFeedRef}
-                  className="max-h-36 space-y-0.5 overflow-y-auto"
-                >
-                  {liveActivity.map((entry) => (
-                    <div
-                      key={entry.id}
-                      className="flex items-baseline gap-1.5 py-px font-mono text-[11px] leading-snug text-muted-foreground/80"
-                    >
-                      <span className="shrink-0 select-none text-[10px] text-muted-foreground/40">
-                        {entry.kind === "reasoning" ? "💭" : entry.kind === "tool" ? "🔧" : entry.kind === "preview" ? "👁" : "•"}
-                      </span>
-                      <span className="min-w-0 truncate">{entry.text}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
             ) : null}
 
             <p className="text-xs text-muted-foreground">{activity}</p>
@@ -1773,16 +1844,16 @@ export default function ProjectWorkspacePage() {
             </div>
 
             {isTerminalOpen ? (
-              <div className="h-[38%] min-h-[180px] max-h-[420px] border-t border-border/70 p-3">
+              <div className="h-[38%] min-h-[180px] max-h-[420px] border-t border-border/70 bg-[#090a0a] p-3">
                 <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-wide text-muted-foreground">
                   <div className="flex items-center gap-2">
                     <HiCommandLine className="size-4" />
-                    <span>Runtime Output</span>
+                    <span>Terminal</span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-muted-foreground/70">
+                    {/* <span className="text-[10px] text-muted-foreground/70">
                       {activeRunId ? `Run ${activeRunId.slice(0, 8)}` : "Read only"}
-                    </span>
+                    </span> */}
                     <Button
                       variant="ghost"
                       size="icon-sm"
@@ -1794,9 +1865,7 @@ export default function ProjectWorkspacePage() {
                     </Button>
                   </div>
                 </div>
-                <div className="h-[calc(100%-1.75rem)] overflow-hidden rounded-lg border border-border/70 bg-[#0b0d10] p-2">
-                  <div ref={terminalContainerRef} className="h-full w-full" />
-                </div>
+                <div ref={terminalContainerRef} className="h-[calc(100%-1.75rem)] w-full overflow-hidden" />
               </div>
             ) : null}
           </div>
