@@ -133,32 +133,49 @@ export default function ProjectsPage() {
               <Link
                 key={project.id}
                 href={`/projects/${project.id}`}
-                className="group flex flex-col justify-between rounded-xl border border-border/60 bg-card/60 p-5 transition-colors hover:border-border hover:bg-card"
+                className="group flex flex-col justify-between overflow-hidden rounded-xl border border-border/60 bg-card/60 transition-colors hover:border-border hover:bg-card"
               >
-                <div>
-                  <div className="mb-3 flex items-start justify-between gap-2">
-                    <h2 className="truncate text-sm font-semibold text-foreground group-hover:text-foreground">
-                      {project.name}
-                    </h2>
-                    <span
-                      className={`shrink-0 rounded-md px-2 py-0.5 text-[10px] font-medium ${statusInfo.className}`}
-                    >
-                      {statusInfo.label}
-                    </span>
-                  </div>
-                  {project.description ? (
-                    <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">
-                      {project.description}
-                    </p>
-                  ) : null}
-                </div>
-                <div className="mt-4 flex items-center gap-1.5 text-[11px] text-muted-foreground/70">
-                  {project.lastOpenedAt ? (
-                    <HiClock className="size-3" />
+                <div className="aspect-[16/9] w-full overflow-hidden border-b border-border/60 bg-black/30">
+                  {project.thumbnailUrl ? (
+                    <img
+                      src={project.thumbnailUrl}
+                      alt={`${project.name} thumbnail`}
+                      className="h-full w-full object-cover"
+                      loading="lazy"
+                    />
                   ) : (
-                    <HiArrowPath className="size-3" />
+                    <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground/70">
+                      No thumbnail yet
+                    </div>
                   )}
-                  {timeLabel}
+                </div>
+
+                <div className="flex flex-1 flex-col justify-between p-5">
+                  <div>
+                    <div className="mb-3 flex items-start justify-between gap-2">
+                      <h2 className="truncate text-sm font-semibold text-foreground group-hover:text-foreground">
+                        {project.name}
+                      </h2>
+                      <span
+                        className={`shrink-0 rounded-md px-2 py-0.5 text-[10px] font-medium ${statusInfo.className}`}
+                      >
+                        {statusInfo.label}
+                      </span>
+                    </div>
+                    {project.description ? (
+                      <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+                        {project.description}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="mt-4 flex items-center gap-1.5 text-[11px] text-muted-foreground/70">
+                    {project.lastOpenedAt ? (
+                      <HiClock className="size-3" />
+                    ) : (
+                      <HiArrowPath className="size-3" />
+                    )}
+                    {timeLabel}
+                  </div>
                 </div>
               </Link>
             );

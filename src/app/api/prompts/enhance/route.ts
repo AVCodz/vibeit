@@ -19,11 +19,30 @@ export async function POST(request: Request) {
     return Response.json({ error: "Prompt is required" }, { status: 400 });
   }
 
+  if (prompt.length > 12000) {
+    return Response.json({
+      enhancedPrompt: prompt,
+      fallback: true,
+      warning: "Prompt is too long to enhance",
+    });
+  }
+
   try {
     const enhancedPrompt = await enhancePrompt(prompt);
-    return Response.json({ enhancedPrompt });
+
+    if (!enhancedPrompt.trim()) {
+      return Response.json({
+        enhancedPrompt: prompt,
+        fallback: true,
+      });
+    }
+
+    return Response.json({ enhancedPrompt, fallback: false });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to enhance prompt";
-    return Response.json({ error: message }, { status: 500 });
+    return Response.json({
+      enhancedPrompt: prompt,
+      fallback: true,
+      warning: error instanceof Error ? error.message : "Failed to enhance prompt",
+    });
   }
 }

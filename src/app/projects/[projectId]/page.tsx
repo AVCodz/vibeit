@@ -4,9 +4,11 @@ import Editor from "@monaco-editor/react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
+  HiArrowDown,
   HiArrowLeft,
   HiArrowPath,
   HiChevronDown,
@@ -17,9 +19,27 @@ import {
   HiFolderOpen,
   HiOutlineArrowTopRightOnSquare,
   HiSparkles,
+  HiXMark,
 } from "react-icons/hi2";
+import {
+  VscFolder,
+  VscFolderOpened,
+  VscJson,
+  VscMarkdown,
+  VscFile,
+} from "react-icons/vsc";
+import {
+  SiTypescript,
+  SiJavascript,
+  SiCss3,
+  SiHtml5,
+} from "react-icons/si";
+import type { Terminal as XTermInstance } from "@xterm/xterm";
+import type { FitAddon } from "@xterm/addon-fit";
 
 type WorkspaceTab = "preview" | "files";
+
+type RunMode = "build" | "plan";
 
 type WorkspaceFile = {
   path: string;
@@ -52,6 +72,8 @@ type LiveActivityEntry = {
 };
 
 const ACTIVITY_FEED_MAX = 30;
+const PROJECT_UI_CACHE_VERSION = 1;
+const PROJECT_UI_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
 
 const FILE_WRITE_VERBS = ["write", "edit", "create", "update", "overwrite", "patch", "save"];
 
@@ -77,6 +99,40 @@ function parseToolActivity(toolName: string, input: unknown): string {
   return `Tool: ${toolName}`;
 }
 
+function toolEventRequiresPreviewReload(toolName: string, input: unknown) {
+  const normalizedToolName = toolName.toLowerCase();
+  const inputObj = (input && typeof input === "object") ? input as Record<string, unknown> : null;
+  const pathValue = inputObj && typeof inputObj.path === "string" ? inputObj.path.toLowerCase() : "";
+
+  if (["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb"].some((name) => pathValue.endsWith(name))) {
+    return true;
+  }
+
+  const commandCandidates = [inputObj?.command, inputObj?.cmd, inputObj?.script, inputObj?.text]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+    .toLowerCase();
+
+  if (!commandCandidates) {
+    return false;
+  }
+
+  if (!(normalizedToolName.includes("bash") || normalizedToolName.includes("command") || normalizedToolName.includes("shell"))) {
+    return false;
+  }
+
+  return [
+    "npm install",
+    "npm i",
+    "pnpm install",
+    "pnpm add",
+    "yarn add",
+    "yarn install",
+    "bun add",
+    "bun install",
+  ].some((needle) => commandCandidates.includes(needle));
+}
+
 function randomId() {
   return crypto.randomUUID();
 }
@@ -96,6 +152,121 @@ function getLanguageFromPath(path: string) {
   }
 
   return "plaintext";
+}
+
+type CachedFileEntry = {
+  content: string;
+  updatedAt: number;
+};
+
+type FileContentCache = Record<string, CachedFileEntry>;
+
+type ProjectUiCache = {
+  version: number;
+  updatedAt: number;
+  projectName?: string;
+  messages?: ChatMessage[];
+  runMode?: RunMode;
+};
+
+function getCacheKey(projectId: string) {
+  return `project_files_cache:${projectId}`;
+}
+
+function getProjectUiCacheKey(projectId: string) {
+  return `project_ui_cache:${projectId}`;
+}
+
+function readCache(projectId: string): FileContentCache {
+  try {
+    const raw = localStorage.getItem(getCacheKey(projectId));
+    if (!raw) return {};
+    return JSON.parse(raw) as FileContentCache;
+  } catch {
+    return {};
+  }
+}
+
+function writeCacheEntry(projectId: string, path: string, content: string) {
+  try {
+    const cache = readCache(projectId);
+    cache[path] = { content, updatedAt: Date.now() };
+    localStorage.setItem(getCacheKey(projectId), JSON.stringify(cache));
+  } catch {
+    /* localStorage full or unavailable – silently skip */
+  }
+}
+
+function readProjectUiCache(projectId: string): ProjectUiCache | null {
+  try {
+    const raw = localStorage.getItem(getProjectUiCacheKey(projectId));
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as ProjectUiCache;
+    if (parsed.version !== PROJECT_UI_CACHE_VERSION) {
+      return null;
+    }
+
+    if (Date.now() - parsed.updatedAt > PROJECT_UI_CACHE_TTL_MS) {
+      return null;
+    }
+
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeProjectUiCache(projectId: string, payload: {
+  projectName: string;
+  messages: ChatMessage[];
+  runMode: RunMode;
+}) {
+  try {
+    const data: ProjectUiCache = {
+      version: PROJECT_UI_CACHE_VERSION,
+      updatedAt: Date.now(),
+      projectName: payload.projectName,
+      messages: payload.messages,
+      runMode: payload.runMode,
+    };
+
+    localStorage.setItem(getProjectUiCacheKey(projectId), JSON.stringify(data));
+  } catch {
+    // ignore cache write errors
+  }
+}
+
+function getFileIcon(name: string, isDir: boolean, isExpanded: boolean) {
+  if (isDir) {
+    return isExpanded
+      ? <VscFolderOpened className="size-4 shrink-0 text-amber-400/80" />
+      : <VscFolder className="size-4 shrink-0 text-amber-400/70" />;
+  }
+
+  const ext = name.slice(name.lastIndexOf(".")).toLowerCase();
+  switch (ext) {
+    case ".ts":
+    case ".tsx":
+      return <SiTypescript className="size-3.5 shrink-0 text-blue-400" />;
+    case ".js":
+    case ".jsx":
+      return <SiJavascript className="size-3.5 shrink-0 text-yellow-400" />;
+    case ".css":
+    case ".scss":
+      return <SiCss3 className="size-3.5 shrink-0 text-sky-400" />;
+    case ".html":
+      return <SiHtml5 className="size-3.5 shrink-0 text-orange-400" />;
+    case ".json":
+      return <VscJson className="size-4 shrink-0 text-yellow-300/80" />;
+    case ".md":
+    case ".mdx":
+      return <VscMarkdown className="size-4 shrink-0 text-blue-300/80" />;
+    default:
+      return <VscFile className="size-4 shrink-0 text-muted-foreground/70" />;
+  }
 }
 
 function buildFileTree(entries: WorkspaceFile[]) {
@@ -169,23 +340,33 @@ export default function ProjectWorkspacePage() {
   const [chatInput, setChatInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isMessagesLoading, setIsMessagesLoading] = useState(true);
-  const [bootstrapLogs, setBootstrapLogs] = useState<string[]>([]);
+  const [terminalLogs, setTerminalLogs] = useState<string[]>([]);
   const [activity, setActivity] = useState("Ready");
   const [isRunning, setIsRunning] = useState(false);
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [isOpening, setIsOpening] = useState(false);
   const [isWorkspaceReady, setIsWorkspaceReady] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
+  const [isTerminalOpen, setIsTerminalOpen] = useState(true);
+  const [runMode, setRunMode] = useState<RunMode>("build");
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [queuedPrompt, setQueuedPrompt] = useState("");
   const [initialMessageIds, setInitialMessageIds] = useState<{
     userId: string;
     assistantId: string;
   } | null>(null);
+  const [isFileContentLoading, setIsFileContentLoading] = useState(false);
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({
     src: true,
   });
   const [liveActivity, setLiveActivity] = useState<LiveActivityEntry[]>([]);
   const activityFeedRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const terminalContainerRef = useRef<HTMLDivElement>(null);
+  const xtermRef = useRef<XTermInstance | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
+  const terminalCursorRef = useRef(0);
   const initialPromptRan = useRef(false);
   const router = useRouter();
 
@@ -240,7 +421,7 @@ export default function ProjectWorkspacePage() {
     }
   }, [projectId]);
 
-  const appendBootstrapLog = useCallback((raw: string) => {
+  const pushTerminalLog = useCallback((raw: string) => {
     const lines = raw
       .split("\n")
       .map((line) => line.trimEnd())
@@ -250,10 +431,21 @@ export default function ProjectWorkspacePage() {
       return;
     }
 
-    setBootstrapLogs((current) => {
+    setTerminalLogs((current) => {
       const next = [...current, ...lines];
       return next.slice(-120);
     });
+  }, []);
+
+  const resetTerminalLogs = useCallback((title?: string) => {
+    setTerminalLogs([]);
+    terminalCursorRef.current = 0;
+    if (xtermRef.current) {
+      xtermRef.current.clear();
+      if (title) {
+        xtermRef.current.writeln(title);
+      }
+    }
   }, []);
 
   const replaceProjectUrlParams = useCallback(
@@ -284,6 +476,42 @@ export default function ProjectWorkspacePage() {
     },
     [replaceProjectUrlParams],
   );
+
+  useEffect(() => {
+    if (!projectId) {
+      return;
+    }
+
+    const cached = readProjectUiCache(projectId);
+    if (!cached) {
+      return;
+    }
+
+    if (cached.projectName) {
+      applyProjectName(cached.projectName);
+    }
+
+    if (cached.messages && cached.messages.length > 0) {
+      setMessages(cached.messages);
+      setIsMessagesLoading(false);
+    }
+
+    if (cached.runMode) {
+      setRunMode(cached.runMode);
+    }
+  }, [applyProjectName, projectId]);
+
+  useEffect(() => {
+    if (!projectId) {
+      return;
+    }
+
+    writeProjectUiCache(projectId, {
+      projectName,
+      messages,
+      runMode,
+    });
+  }, [messages, projectId, projectName, runMode]);
 
   const loadFiles = useCallback(async () => {
     if (!projectId) {
@@ -333,30 +561,46 @@ export default function ProjectWorkspacePage() {
         return;
       }
 
-      const response = await fetch(
-        `/api/projects/${projectId}/files/content?path=${encodeURIComponent(path)}`,
-        { cache: "no-store" },
-      );
+      const cache = readCache(projectId);
+      const cached = cache[path];
 
-      const data = (await response.json()) as {
-        content?: string;
-        error?: string;
-      };
-
-      if (!response.ok || typeof data.content !== "string") {
-        throw new Error(data.error ?? "Failed to load file content");
+      if (cached) {
+        setFiles((current) =>
+          current.map((file) =>
+            file.path === path ? { ...file, content: cached.content } : file,
+          ),
+        );
+      } else {
+        setIsFileContentLoading(true);
       }
 
-      setFiles((current) =>
-        current.map((file) =>
-          file.path === path
-            ? {
-                ...file,
-                content: data.content,
-              }
-            : file,
-        ),
-      );
+      try {
+        const response = await fetch(
+          `/api/projects/${projectId}/files/content?path=${encodeURIComponent(path)}`,
+          { cache: "no-store" },
+        );
+
+        const data = (await response.json()) as {
+          content?: string;
+          error?: string;
+        };
+
+        if (!response.ok || typeof data.content !== "string") {
+          throw new Error(data.error ?? "Failed to load file content");
+        }
+
+        if (!cached || cached.content !== data.content) {
+          setFiles((current) =>
+            current.map((file) =>
+              file.path === path ? { ...file, content: data.content } : file,
+            ),
+          );
+        }
+
+        writeCacheEntry(projectId, path, data.content);
+      } finally {
+        setIsFileContentLoading(false);
+      }
     },
     [projectId],
   );
@@ -409,6 +653,10 @@ export default function ProjectWorkspacePage() {
       return;
     }
 
+    if (projectId) {
+      writeCacheEntry(projectId, pathValue, contentValue);
+    }
+
     setFiles((currentFiles) => {
       const existing = currentFiles.find((file) => file.path === pathValue);
       if (existing) {
@@ -432,7 +680,7 @@ export default function ProjectWorkspacePage() {
         },
       ];
     });
-  }, []);
+  }, [projectId]);
 
   const runPrompt = useCallback(async (
     prompt: string,
@@ -488,6 +736,8 @@ export default function ProjectWorkspacePage() {
     }
 
     try {
+      let shouldForcePreviewReload = false;
+
       const response = await fetch(`/api/projects/${projectId}/runs/stream`, {
         method: "POST",
         headers: {
@@ -497,6 +747,7 @@ export default function ProjectWorkspacePage() {
           prompt: trimmedPrompt,
           userMessageId: existingMessageIds?.userId,
           assistantMessageId: existingMessageIds?.assistantId,
+          mode: runMode,
         }),
       });
 
@@ -532,6 +783,11 @@ export default function ProjectWorkspacePage() {
           const payload = JSON.parse(dataMatch[1] ?? "{}");
 
             if (eventName === "run.started") {
+              if (typeof payload.runId === "string") {
+                setActiveRunId(payload.runId);
+                resetTerminalLogs(`Run ${payload.runId} started (${runMode})`);
+              }
+
               if (typeof payload.previewUrl === "string" && payload.previewUrl.length > 0) {
                 setPreviewUrlWithRoute(payload.previewUrl);
               }
@@ -584,6 +840,7 @@ export default function ProjectWorkspacePage() {
               if (typeof payload.message === "string" && payload.message.length > 0) {
                 setActivity(payload.message);
                 pushActivityEntry(payload.message, "preview");
+                pushTerminalLog(payload.message);
               }
               continue;
             }
@@ -625,13 +882,27 @@ export default function ProjectWorkspacePage() {
           if (eventName === "run.tool") {
             if (typeof payload.name === "string") {
               setActivity(`Tool: ${payload.name}`);
-              pushActivityEntry(parseToolActivity(payload.name, payload.input), "tool");
+              const toolSummary = parseToolActivity(payload.name, payload.input);
+              pushActivityEntry(toolSummary, "tool");
+              pushTerminalLog(`[tool] ${toolSummary}`);
+
+              if (!shouldForcePreviewReload && toolEventRequiresPreviewReload(payload.name, payload.input)) {
+                shouldForcePreviewReload = true;
+                pushTerminalLog("[preview] Detected dependency/config changes, preview will refresh after run.");
+              }
             }
             upsertFileFromToolInput(payload.input);
             continue;
           }
 
-          if (eventName === "run.finished") {
+          if (eventName === "files.synced") {
+            if (typeof payload.fileCount === "number") {
+              pushTerminalLog(`Synced ${payload.fileCount} files to R2`);
+            }
+            continue;
+          }
+
+            if (eventName === "run.finished") {
             if (typeof payload.output === "string") {
               setMessages((current) =>
                 current.map((message) =>
@@ -645,10 +916,16 @@ export default function ProjectWorkspacePage() {
                 ),
               );
             }
-            clearActivityFeed();
-            setActivity("Run finished");
-            continue;
-          }
+              clearActivityFeed();
+              if (runMode === "build" && shouldForcePreviewReload && previewUrl) {
+                setPreviewNonce((value) => value + 1);
+                pushTerminalLog("[preview] Reloaded after dependency/config updates.");
+                setActivity("Run finished. Refreshing preview...");
+              } else {
+                setActivity(runMode === "plan" ? "Plan finished" : "Run finished");
+              }
+              continue;
+            }
 
           if (eventName === "run.failed") {
             setMessages((current) =>
@@ -663,6 +940,9 @@ export default function ProjectWorkspacePage() {
             );
             clearActivityFeed();
             setActivity("Run failed");
+            if (typeof payload.error === "string" && payload.error.length > 0) {
+              pushTerminalLog(`[error] ${payload.error}`);
+            }
           }
         }
 
@@ -683,11 +963,13 @@ export default function ProjectWorkspacePage() {
       );
       clearActivityFeed();
       setActivity(error instanceof Error ? error.message : "Run failed");
+      pushTerminalLog(error instanceof Error ? `[error] ${error.message}` : "[error] Run failed");
     } finally {
       setIsRunning(false);
       setInitialMessageIds(null);
+      setActiveRunId(null);
     }
-  }, [appendAssistantText, applyProjectName, clearActivityFeed, isWorkspaceReady, loadFiles, loadMessages, projectId, pushActivityEntry, setPreviewUrlWithRoute, upsertFileFromToolInput]);
+  }, [appendAssistantText, applyProjectName, clearActivityFeed, isWorkspaceReady, loadFiles, loadMessages, previewUrl, projectId, pushActivityEntry, pushTerminalLog, resetTerminalLogs, runMode, setPreviewUrlWithRoute, upsertFileFromToolInput]);
 
   const handleEnhancePrompt = async () => {
     const prompt = chatInput.trim();
@@ -844,9 +1126,13 @@ export default function ProjectWorkspacePage() {
         }
 
         if (stateData.hasActiveSession) {
-          setIsOpening(false);
-          setActivity(stateData.previewUrl ? "Project ready" : "Workspace ready, generating your project...");
-          return;
+          if (stateData.previewUrl) {
+            setIsOpening(false);
+            setActivity("Project ready");
+            return;
+          }
+
+          setActivity("Reconnecting workspace...");
         }
 
         setIsOpening(true);
@@ -892,14 +1178,14 @@ export default function ProjectWorkspacePage() {
             if (eventName === "open.status") {
               if (typeof payload.message === "string" && payload.message.length > 0) {
                 setActivity(payload.message);
-                appendBootstrapLog(payload.message);
+                pushTerminalLog(payload.message);
               }
               continue;
             }
 
             if (eventName === "open.log") {
               if (typeof payload.message === "string" && payload.message.length > 0) {
-                appendBootstrapLog(payload.message);
+                pushTerminalLog(payload.message);
               }
               continue;
             }
@@ -965,7 +1251,7 @@ export default function ProjectWorkspacePage() {
     return () => {
       abortController.abort();
     };
-  }, [appendBootstrapLog, applyProjectName, projectId, replaceProjectUrlParams, setPreviewUrlWithRoute]);
+  }, [applyProjectName, projectId, pushTerminalLog, replaceProjectUrlParams, setPreviewUrlWithRoute]);
 
   useEffect(() => {
     if (!queuedPrompt || !isWorkspaceReady || isOpening || isRunning) {
@@ -1011,6 +1297,116 @@ export default function ProjectWorkspacePage() {
     }
   }, [liveActivity]);
 
+  const scrollChatToBottom = useCallback(() => {
+    chatScrollRef.current?.scrollTo({
+      top: chatScrollRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, []);
+
+  const handleChatScroll = useCallback(() => {
+    const container = chatScrollRef.current;
+    if (!container) {
+      return;
+    }
+
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    setShowScrollToBottom(distanceFromBottom > 120);
+  }, []);
+
+  useEffect(() => {
+    const container = chatScrollRef.current;
+    if (!container) {
+      return;
+    }
+
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    if (distanceFromBottom < 120) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }, [messages]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void (async () => {
+      if (!terminalContainerRef.current || xtermRef.current) {
+        return;
+      }
+
+      const [{ Terminal }, { FitAddon }] = await Promise.all([
+        import("@xterm/xterm"),
+        import("@xterm/addon-fit"),
+      ]);
+
+      if (cancelled || !terminalContainerRef.current) {
+        return;
+      }
+
+      const term = new Terminal({
+        convertEol: true,
+        cursorBlink: false,
+        disableStdin: true,
+        fontFamily: "var(--font-geist-mono)",
+        fontSize: 12,
+        lineHeight: 1.35,
+        theme: {
+          background: "#0b0d10",
+          foreground: "#d6d8df",
+        },
+      });
+
+      const fitAddon = new FitAddon();
+      term.loadAddon(fitAddon);
+      term.open(terminalContainerRef.current);
+      fitAddon.fit();
+      term.writeln("VibeIt terminal ready");
+
+      xtermRef.current = term;
+      fitAddonRef.current = fitAddon;
+    })();
+
+    const onResize = () => {
+      fitAddonRef.current?.fit();
+    };
+
+    window.addEventListener("resize", onResize);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("resize", onResize);
+      xtermRef.current?.dispose();
+      xtermRef.current = null;
+      fitAddonRef.current = null;
+      terminalCursorRef.current = 0;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!xtermRef.current) {
+      return;
+    }
+
+    const newLines = terminalLogs.slice(terminalCursorRef.current);
+    if (newLines.length === 0) {
+      return;
+    }
+
+    for (const line of newLines) {
+      xtermRef.current.writeln(line);
+    }
+
+    terminalCursorRef.current = terminalLogs.length;
+  }, [terminalLogs]);
+
+  useEffect(() => {
+    if (!isTerminalOpen) {
+      return;
+    }
+
+    fitAddonRef.current?.fit();
+  }, [isTerminalOpen]);
+
   return (
     <main className="min-h-screen bg-background text-foreground">
       <div className="mx-auto grid min-h-screen w-full max-w-[1800px] grid-cols-1 gap-3 p-3 lg:grid-cols-[420px_1fr]">
@@ -1035,8 +1431,12 @@ export default function ProjectWorkspacePage() {
             </Button>
           </div>
 
-          <div className="mb-4 flex min-h-0 flex-1 flex-col gap-3">
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+          <div className="relative mb-4 flex min-h-0 flex-1 flex-col gap-3">
+            <div
+              ref={chatScrollRef}
+              onScroll={handleChatScroll}
+              className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1"
+            >
               {isMessagesLoading ? (
                 <div className="space-y-2">
                   <div className="h-12 w-[70%] animate-pulse rounded-2xl bg-secondary/60" />
@@ -1087,11 +1487,45 @@ export default function ProjectWorkspacePage() {
                       "Analyzing..."
                     )
                   ) : (
-                    message.content
+                    <div className="prose prose-sm prose-invert max-w-none break-words text-white prose-p:my-1.5 prose-p:text-white prose-ul:my-1.5 prose-ul:text-white prose-ol:my-1.5 prose-ol:text-white prose-li:my-0.5 prose-li:text-white prose-li:marker:text-white prose-headings:mb-2 prose-headings:mt-3 prose-headings:text-white prose-strong:text-white prose-pre:my-2 prose-pre:rounded-lg prose-pre:bg-blue-900/40 prose-pre:p-3 prose-code:rounded prose-code:bg-blue-900/30 prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[13px] prose-code:text-white prose-code:before:content-none prose-code:after:content-none">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          pre: ({ children, ...props }) => (
+                            <pre className="overflow-x-auto rounded-lg bg-blue-900/40 p-3 text-[13px] leading-relaxed" {...props}>
+                              {children}
+                            </pre>
+                          ),
+                          code: ({ children, className, ...props }) => {
+                            const isBlock = className?.startsWith("language-");
+                            return isBlock ? (
+                              <code className={className} {...props}>{children}</code>
+                            ) : (
+                              <code className="rounded bg-blue-900/30 px-1.5 py-0.5 text-[13px]" {...props}>
+                                {children}
+                              </code>
+                            );
+                          },
+                        }}
+                      >
+                        {message.content}
+                      </ReactMarkdown>
+                    </div>
                   )}
                 </div>
               ))}
             </div>
+
+            {showScrollToBottom ? (
+              <button
+                type="button"
+                onClick={scrollChatToBottom}
+                className="absolute cursor-pointer bottom-16 left-1/2 z-10 flex size-8 -translate-x-1/2 items-center justify-center rounded-full border border-border/70 bg-card/90 shadow-md transition-opacity hover:bg-card"
+                aria-label="Scroll to latest message"
+              >
+                <HiArrowDown className="size-4 text-muted-foreground" />
+              </button>
+            ) : null}
 
             {isRunning && liveActivity.length > 0 ? (
               <div className="rounded-xl border border-border/50 bg-background/40 p-2.5">
@@ -1118,38 +1552,36 @@ export default function ProjectWorkspacePage() {
               </div>
             ) : null}
 
-            {bootstrapLogs.length > 0 && !previewUrl ? (
-              <div className="rounded-xl border border-border/70 bg-background/60 p-3">
-                <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
-                  <HiCommandLine className="size-4" />
-                  Bootstrap Logs
-                </div>
-                <pre className="max-h-44 overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-muted-foreground">
-                  {bootstrapLogs.join("\n")}
-                </pre>
-              </div>
-            ) : null}
-
             <p className="text-xs text-muted-foreground">{activity}</p>
           </div>
 
-          <div className="space-y-3 rounded-xl border border-border/70 bg-background/60 p-3">
+          <div className="relative space-y-3 rounded-xl border border-border/70 bg-background/60 p-3">
+            <Button
+              size="icon-sm"
+              type="button"
+              variant="secondary"
+              onClick={handleEnhancePrompt}
+              disabled={isEnhancing || isRunning || isOpening || isClosing || !chatInput.trim()}
+              className="absolute top-3 right-3"
+              aria-label="Enhance prompt"
+            >
+              <HiSparkles className="size-4" />
+            </Button>
             <textarea
               value={chatInput}
               onChange={(event) => setChatInput(event.target.value)}
               placeholder="Describe what you want to build..."
-              className="min-h-28 w-full resize-none bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+              className="min-h-28 w-full resize-none bg-transparent pr-12 text-sm outline-none placeholder:text-muted-foreground"
             />
             <div className="flex items-center justify-between gap-2">
               <Button
-                size="sm"
                 type="button"
+                size="sm"
                 variant="secondary"
-                onClick={handleEnhancePrompt}
-                disabled={isEnhancing || isRunning || isOpening || isClosing || !chatInput.trim()}
+                onClick={() => setRunMode((current) => (current === "build" ? "plan" : "build"))}
+                aria-label={runMode === "build" ? "Switch to plan mode" : "Switch to build mode"}
               >
-                <HiSparkles className="size-4" />
-                Enhance
+                {runMode === "build" ? "Build" : "Plan"}
               </Button>
               <Button
                 size="sm"
@@ -1163,7 +1595,7 @@ export default function ProjectWorkspacePage() {
           </div>
         </section>
 
-        <section className="flex min-h-[60vh] flex-col rounded-2xl border border-border/70 bg-card/60 lg:min-h-0">
+        <section className="flex h-[calc(100dvh-1.5rem)] flex-col overflow-hidden rounded-2xl border border-border/70 bg-card/60">
           <header className="flex items-center justify-between border-b border-border/70 px-3 py-2">
             <div className="flex items-center gap-2">
               <Button
@@ -1185,6 +1617,16 @@ export default function ProjectWorkspacePage() {
             </div>
 
             <div className="flex items-center gap-2">
+              <Button
+                variant={isTerminalOpen ? "secondary" : "ghost"}
+                size="sm"
+                type="button"
+                aria-label="Toggle terminal"
+                onClick={() => setIsTerminalOpen((value) => !value)}
+              >
+                <HiCommandLine className="size-4" />
+                Terminal
+              </Button>
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -1221,112 +1663,143 @@ export default function ProjectWorkspacePage() {
             </div>
           </header>
 
-          {activeTab === "preview" ? (
-            <div className="relative flex-1 overflow-hidden rounded-b-2xl bg-background">
-              {previewUrl ? (
-                <iframe
-                  src={`${previewUrl}${previewUrl.includes("?") ? "&" : "?"}v=${previewNonce}`}
-                  title="Project preview"
-                  className="h-full w-full"
-                  sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
-                />
-              ) : (
-                <div className="grid h-full place-items-center p-8 text-center">
-                  <div className="max-w-md space-y-2 rounded-xl border border-border/70 bg-card/60 p-5">
-                    <div className="mx-auto h-4 w-36 animate-pulse rounded bg-secondary/70" />
-                    <p className="text-sm font-medium">Preview is starting</p>
-                    <p className="text-xs text-muted-foreground">
-                      Once the Upstash preview URL is ready, it will appear here automatically.
-                    </p>
+           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <div className={cn("relative h-full overflow-hidden bg-background", activeTab === "preview" ? "block" : "hidden")}>
+                {previewUrl ? (
+                  <iframe
+                    src={`${previewUrl}${previewUrl.includes("?") ? "&" : "?"}v=${previewNonce}`}
+                    title="Project preview"
+                    className="h-full w-full"
+                    sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
+                  />
+                ) : (
+                  <div className="grid h-full place-items-center p-8 text-center">
+                    <div className="max-w-md space-y-2 rounded-xl border border-border/70 bg-card/60 p-5">
+                      <div className="mx-auto h-4 w-36 animate-pulse rounded bg-secondary/70" />
+                      <p className="text-sm font-medium">
+                        {runMode === "plan" && isRunning
+                          ? "Preview is disabled in Plan mode"
+                          : "Preview is starting"}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {runMode === "plan" && isRunning
+                          ? "Switch to Build mode to generate files and start preview."
+                          : "Once the Upstash preview URL is ready, it will appear here automatically."}
+                      </p>
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[260px_1fr]">
-              <aside className="border-b border-border/70 bg-background/50 p-3 lg:border-b-0 lg:border-r">
-                <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
-                  <HiFolderOpen className="size-4" />
-                  Files
-                </div>
-                <div className="space-y-1">
-                  {fileTree.map((node) => {
-                    const renderNode = (currentNode: FileNode, depth: number) => {
-                      const isExpanded = expandedFolders[currentNode.path] ?? false;
+                )}
+              </div>
 
-                      if (currentNode.isDir) {
+              <div className={cn("grid h-full min-h-0 grid-cols-1 overflow-hidden lg:grid-cols-[260px_1fr]", activeTab === "files" ? "grid" : "hidden")}>
+                <aside className="overflow-y-auto border-b border-border/70 bg-background/50 p-3 lg:border-b-0 lg:border-r">
+                  <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
+                    <HiFolderOpen className="size-4" />
+                    Files
+                  </div>
+                  <div className="space-y-0.5">
+                    {fileTree.map((node) => {
+                      const renderNode = (currentNode: FileNode, depth: number) => {
+                        const isExpanded = expandedFolders[currentNode.path] ?? false;
+
+                        if (currentNode.isDir) {
+                          return (
+                            <div key={`dir-${currentNode.path}`}>
+                              <button
+                                type="button"
+                                onClick={() => toggleFolder(currentNode.path)}
+                                className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs text-muted-foreground hover:bg-secondary/60"
+                                style={{ paddingLeft: `${8 + depth * 12}px` }}
+                              >
+                                {isExpanded ? <HiChevronDown className="size-3 shrink-0" /> : <HiChevronRight className="size-3 shrink-0" />}
+                                {getFileIcon(currentNode.name, true, isExpanded)}
+                                <span className="truncate">{currentNode.name}</span>
+                              </button>
+                              {isExpanded
+                                ? currentNode.children.map((child) => renderNode(child, depth + 1))
+                                : null}
+                            </div>
+                          );
+                        }
+
                         return (
-                          <div key={`dir-${currentNode.path}`}>
-                            <button
-                              type="button"
-                              onClick={() => toggleFolder(currentNode.path)}
-                              className="flex w-full items-center gap-1 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-secondary/60"
-                              style={{ paddingLeft: `${8 + depth * 12}px` }}
-                            >
-                              {isExpanded ? <HiChevronDown className="size-3" /> : <HiChevronRight className="size-3" />}
-                              <span className="truncate">{currentNode.name}</span>
-                            </button>
-                            {isExpanded
-                              ? currentNode.children.map((child) => renderNode(child, depth + 1))
-                              : null}
-                          </div>
+                          <button
+                            key={currentNode.path}
+                            type="button"
+                            onClick={() => setSelectedFilePath(currentNode.path)}
+                            className={`flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs ${
+                              selectedFile?.path === currentNode.path
+                                ? "bg-secondary text-foreground"
+                                : "text-muted-foreground hover:bg-secondary/60"
+                            }`}
+                            style={{ paddingLeft: `${8 + depth * 12 + 16}px` }}
+                          >
+                            {getFileIcon(currentNode.name, false, false)}
+                            <span className="truncate">{currentNode.name}</span>
+                          </button>
                         );
-                      }
+                      };
 
-                      return (
-                        <button
-                          key={currentNode.path}
-                          type="button"
-                          onClick={() => setSelectedFilePath(currentNode.path)}
-                          className={`block w-full rounded-md px-2 py-1.5 text-left text-xs ${
-                            selectedFile?.path === currentNode.path
-                              ? "bg-secondary text-foreground"
-                              : "text-muted-foreground hover:bg-secondary/60"
-                          }`}
-                          style={{ paddingLeft: `${8 + depth * 12}px` }}
-                        >
-                          {currentNode.name}
-                        </button>
-                      );
-                    };
+                      return renderNode(node, 0);
+                    })}
+                  </div>
+                </aside>
 
-                    return renderNode(node, 0);
-                  })}
+                <div className="relative h-full min-h-0 overflow-hidden">
+                  {isFileContentLoading && (
+                    <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+                      <div className="flex items-center gap-2.5 rounded-lg border border-border/50 bg-card/80 px-4 py-2.5">
+                        <div className="size-4 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-blue-400" />
+                        <span className="text-xs text-muted-foreground">Loading file…</span>
+                      </div>
+                    </div>
+                  )}
+                  <Editor
+                    height="100%"
+                    language={selectedFile?.language ?? "typescript"}
+                    value={selectedFile?.content ?? ""}
+                    theme="vs-dark"
+                    options={{
+                      readOnly: true,
+                      minimap: { enabled: false },
+                      fontSize: 13,
+                      smoothScrolling: true,
+                      automaticLayout: true,
+                    }}
+                  />
                 </div>
-              </aside>
-
-              <div className="min-h-[420px]">
-                <Editor
-                  height="100%"
-                  language={selectedFile?.language ?? "typescript"}
-                  value={selectedFile?.content ?? ""}
-                  theme="vs-dark"
-                  onChange={(value) => {
-                    if (!selectedFile) {
-                      return;
-                    }
-
-                    setFiles((currentFiles) =>
-                      currentFiles.map((file) =>
-                        file.path === selectedFile.path
-                          ? {
-                              ...file,
-                              content: value ?? "",
-                            }
-                          : file,
-                      ),
-                    );
-                  }}
-                  options={{
-                    minimap: { enabled: false },
-                    fontSize: 13,
-                    smoothScrolling: true,
-                    automaticLayout: true,
-                  }}
-                />
               </div>
             </div>
-          )}
+
+            {isTerminalOpen ? (
+              <div className="h-[38%] min-h-[180px] max-h-[420px] border-t border-border/70 p-3">
+                <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-wide text-muted-foreground">
+                  <div className="flex items-center gap-2">
+                    <HiCommandLine className="size-4" />
+                    <span>Runtime Output</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-muted-foreground/70">
+                      {activeRunId ? `Run ${activeRunId.slice(0, 8)}` : "Read only"}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      type="button"
+                      aria-label="Close terminal"
+                      onClick={() => setIsTerminalOpen(false)}
+                    >
+                      <HiXMark className="size-4" />
+                    </Button>
+                  </div>
+                </div>
+                <div className="h-[calc(100%-1.75rem)] overflow-hidden rounded-lg border border-border/70 bg-[#0b0d10] p-2">
+                  <div ref={terminalContainerRef} className="h-full w-full" />
+                </div>
+              </div>
+            ) : null}
+          </div>
         </section>
       </div>
     </main>

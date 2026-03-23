@@ -2,7 +2,14 @@ import { query } from "@/db";
 import { auth } from "@/lib/auth";
 import { generateProjectNameFromPrompt } from "@/lib/openrouter";
 import { restoreProjectWorkspaceFromR2 } from "@/lib/r2";
-import { bootstrapProjectBox, deleteBoxById, getBoxById, isProjectPreviewHealthy } from "@/lib/upstash-box";
+import {
+  bootstrapProjectBox,
+  deleteBoxById,
+  ensureProjectPreview,
+  getBoxById,
+  isBoxReachable,
+  isProjectPreviewHealthy,
+} from "@/lib/upstash-box";
 
 type ProjectRow = {
   id: string;
@@ -86,6 +93,19 @@ export async function POST(
             : Promise.resolve();
 
         try {
+          const pendingInitialRunResult = await query<{ has_pending: boolean }>(
+            `select exists(
+              select 1
+              from project_messages
+              where project_id = $1
+                and run_id is null
+                and role = 'assistant'
+                and status in ('pending', 'analyzing')
+            ) as has_pending`,
+            [project.id],
+          );
+          const hasPendingInitialRun = Boolean(pendingInitialRunResult.rows[0]?.has_pending);
+
           const latestSessionResult = await query<SessionRow>(
             "select id, upstash_box_id, preview_url, preview_port, session_status from project_sessions where project_id = $1 order by created_at desc limit 1",
             [project.id],
@@ -93,36 +113,70 @@ export async function POST(
 
           const latestSession = latestSessionResult.rows[0];
 
-          if (
+          const canReuseSession = Boolean(
             latestSession?.upstash_box_id &&
-            ["bootstrapped", "starting_preview", "ready"].includes(latestSession.session_status)
-          ) {
-            let previewUrl = latestSession.preview_url;
+              ["bootstrapped", "starting_preview", "ready"].includes(latestSession.session_status),
+          );
 
-            if (latestSession.session_status === "ready" && latestSession.preview_url) {
-              const existingBox = await getBoxById(latestSession.upstash_box_id);
-              const healthy = await isProjectPreviewHealthy(existingBox).catch(() => false);
+          if (latestSession?.upstash_box_id && canReuseSession) {
+            const existingBox = await getBoxById(latestSession.upstash_box_id).catch(() => null);
+            const boxReachable = existingBox ? await isBoxReachable(existingBox).catch(() => false) : false;
 
-              if (!healthy) {
-                previewUrl = null;
+            if (!existingBox || !boxReachable) {
+              await query(
+                "update project_sessions set session_status = $1, ended_at = $2, updated_at = $3 where id = $4",
+                ["closed", new Date(), new Date(), latestSession.id],
+              );
+            } else {
+              let previewUrl = latestSession.preview_url;
+
+              if (latestSession.session_status === "ready" && latestSession.preview_url) {
+                const healthy = await isProjectPreviewHealthy(existingBox).catch(() => false);
+
+                if (!healthy) {
+                  previewUrl = null;
+                  await query(
+                    "update project_sessions set preview_url = $1, session_status = $2, updated_at = $3 where id = $4",
+                    [null, "bootstrapped", new Date(), latestSession.id],
+                  );
+                }
+              }
+
+              if (!previewUrl && !hasPendingInitialRun) {
+                push("open.status", {
+                  step: "start.preview",
+                  message: "Starting preview server...",
+                });
+
+                const preview = await ensureProjectPreview(existingBox, (event) => {
+                  if (event.kind === "status") {
+                    push("open.status", {
+                      step: event.step,
+                      message: event.message,
+                    });
+                  }
+                });
+
+                previewUrl = preview.previewUrl;
+
                 await query(
-                  "update project_sessions set preview_url = $1, session_status = $2, updated_at = $3 where id = $4",
-                  [null, "bootstrapped", new Date(), latestSession.id],
+                  "update project_sessions set preview_url = $1, preview_port = $2, session_status = $3, updated_at = $4 where id = $5",
+                  [preview.previewUrl, preview.previewPort, "ready", new Date(), latestSession.id],
                 );
               }
+
+              push("open.ready", {
+                projectId: project.id,
+                projectName: project.name,
+                sessionId: latestSession.id,
+                previewUrl,
+                previewReachable: Boolean(previewUrl),
+              });
+
+              await renamePromise;
+              controller.close();
+              return;
             }
-
-            push("open.ready", {
-              projectId: project.id,
-              projectName: project.name,
-              sessionId: latestSession.id,
-              previewUrl,
-              previewReachable: Boolean(previewUrl),
-            });
-
-            await renamePromise;
-            controller.close();
-            return;
           }
 
           if (latestSession?.upstash_box_id && latestSession.session_status !== "closed") {
@@ -166,18 +220,42 @@ export async function POST(
                   message: event.message,
                 });
               },
-              skipPreviewStartup: true,
+              skipPreviewStartup: hasPendingInitialRun,
             },
           );
+
+          let sessionStatus = "bootstrapped";
+          let previewUrl: string | null = null;
+          let previewReachable = false;
+
+          if (!hasPendingInitialRun) {
+            push("open.status", {
+              step: "start.preview",
+              message: "Starting preview server...",
+            });
+
+            const preview = await ensureProjectPreview(await getBoxById(box.boxId), (event) => {
+              if (event.kind === "status") {
+                push("open.status", {
+                  step: event.step,
+                  message: event.message,
+                });
+              }
+            });
+
+            sessionStatus = "ready";
+            previewUrl = preview.previewUrl;
+            previewReachable = preview.previewReachable;
+          }
 
           const sessionInsertResult = await query<{ id: string }>(
             "insert into project_sessions (project_id, upstash_box_id, preview_url, preview_port, session_status, started_at, created_at, updated_at) values ($1, $2, $3, $4, $5, $6, $7, $8) returning id",
             [
               project.id,
               box.boxId,
-              null,
+              previewUrl,
               box.previewPort,
-              "bootstrapped",
+              sessionStatus,
               new Date(),
               new Date(),
               new Date(),
@@ -193,8 +271,8 @@ export async function POST(
             projectId: project.id,
             projectName: project.name,
             sessionId: sessionInsertResult.rows[0]?.id,
-            previewUrl: null,
-            previewReachable: false,
+            previewUrl,
+            previewReachable,
           });
 
           await renamePromise;

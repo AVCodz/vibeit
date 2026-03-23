@@ -9,6 +9,7 @@ type RunStreamBody = {
   prompt?: string;
   userMessageId?: string;
   assistantMessageId?: string;
+  mode?: "build" | "plan";
 };
 
 type ProjectMessageRow = {
@@ -35,6 +36,7 @@ export async function POST(
   const { projectId } = await context.params;
   const body = (await request.json()) as RunStreamBody;
   const prompt = body.prompt?.trim();
+  const mode = body.mode === "plan" ? "plan" : "build";
 
   if (!prompt) {
     return Response.json({ error: "Prompt is required" }, { status: 400 });
@@ -156,6 +158,7 @@ export async function POST(
           projectId: project.id,
           projectName: project.name,
           previewUrl: activeProjectSession.preview_url,
+          mode,
           userMessage,
           assistantMessage,
         });
@@ -189,12 +192,21 @@ export async function POST(
           const box = await getBoxById(boxId);
           await box.cd(WORKDIR);
 
-          const runtimePrompt = [
-            "You are working inside a Vite React TypeScript project in the current directory.",
-            "Keep changes inside this project only.",
-            "Prefer editing existing React files instead of creating standalone HTML files.",
-            prompt,
-          ].join("\n\n");
+          const runtimePrompt =
+            mode === "plan"
+              ? [
+                  "You are in PLAN MODE for a Vite React TypeScript project.",
+                  "Do not modify files.",
+                  "Do not run shell commands that change project state.",
+                  "Return a concise implementation plan, key file touchpoints, and acceptance checklist.",
+                  prompt,
+                ].join("\n\n")
+              : [
+                  "You are working inside a Vite React TypeScript project in the current directory.",
+                  "Keep changes inside this project only.",
+                  "Prefer editing existing React files instead of creating standalone HTML files.",
+                  prompt,
+                ].join("\n\n");
 
           const agentStream = await box.agent.stream({ prompt: runtimePrompt });
 
@@ -251,96 +263,98 @@ export async function POST(
             ["completed", new Date(), run.id],
           );
 
-          const sessionStateResult = await query<{
-            preview_url: string | null;
-            preview_port: number | null;
-            session_status: string;
-          }>(
-            "select preview_url, preview_port, session_status from project_sessions where id = $1 limit 1",
-            [activeProjectSession.id],
-          );
-
-          const sessionState = sessionStateResult.rows[0];
-          let previewNeedsStart = !sessionState?.preview_url;
-
-          if (sessionState?.preview_url) {
-            const previewHealthy = await isProjectPreviewHealthy(box);
-
-            if (previewHealthy) {
-              push("preview.ready", {
-                previewUrl: sessionState.preview_url,
-                previewReachable: true,
-              });
-            } else {
-              await query(
-                "update project_sessions set preview_url = $1, session_status = $2, updated_at = $3 where id = $4",
-                [null, "bootstrapped", new Date(), activeProjectSession.id],
-              );
-              previewNeedsStart = true;
-            }
-          }
-
-          if (previewNeedsStart) {
-            const previewLockResult = await query<{ id: string }>(
-              "update project_sessions set session_status = $1, updated_at = $2 where id = $3 and preview_url is null and (session_status <> $4 or updated_at < now() - interval '120 seconds') returning id",
-              ["starting_preview", new Date(), activeProjectSession.id, "starting_preview"],
+          if (mode === "build") {
+            const sessionStateResult = await query<{
+              preview_url: string | null;
+              preview_port: number | null;
+              session_status: string;
+            }>(
+              "select preview_url, preview_port, session_status from project_sessions where id = $1 limit 1",
+              [activeProjectSession.id],
             );
 
-            if (previewLockResult.rows[0]) {
-              push("preview.status", {
-                message: "Starting preview server...",
-              });
+            const sessionState = sessionStateResult.rows[0];
+            let previewNeedsStart = !sessionState?.preview_url;
 
-              const preview = await ensureProjectPreview(box, (event) => {
-                if (event.kind !== "status") {
-                  return;
-                }
+            if (sessionState?.preview_url) {
+              const previewHealthy = await isProjectPreviewHealthy(box);
 
-                push("preview.status", {
-                  message: event.message,
+              if (previewHealthy) {
+                push("preview.ready", {
+                  previewUrl: sessionState.preview_url,
+                  previewReachable: true,
                 });
-              });
+              } else {
+                await query(
+                  "update project_sessions set preview_url = $1, session_status = $2, updated_at = $3 where id = $4",
+                  [null, "bootstrapped", new Date(), activeProjectSession.id],
+                );
+                previewNeedsStart = true;
+              }
+            }
 
-              await query(
-                "update project_sessions set preview_url = $1, preview_port = $2, session_status = $3, updated_at = $4 where id = $5",
-                [preview.previewUrl, preview.previewPort, "ready", new Date(), activeProjectSession.id],
+            if (previewNeedsStart) {
+              const previewLockResult = await query<{ id: string }>(
+                "update project_sessions set session_status = $1, updated_at = $2 where id = $3 and preview_url is null and (session_status <> $4 or updated_at < now() - interval '120 seconds') returning id",
+                ["starting_preview", new Date(), activeProjectSession.id, "starting_preview"],
               );
 
-              push("preview.ready", {
-                previewUrl: preview.previewUrl,
-                previewReachable: preview.previewReachable,
-              });
-            } else {
-              let previewReady = false;
+              if (previewLockResult.rows[0]) {
+                push("preview.status", {
+                  message: "Starting preview server...",
+                });
 
-              for (let index = 0; index < 60; index += 1) {
-                await new Promise((resolve) => setTimeout(resolve, 1000));
+                const preview = await ensureProjectPreview(box, (event) => {
+                  if (event.kind !== "status") {
+                    return;
+                  }
 
-                const polledSessionResult = await query<{
-                  preview_url: string | null;
-                  session_status: string;
-                }>(
-                  "select preview_url, session_status from project_sessions where id = $1 limit 1",
-                  [activeProjectSession.id],
-                );
-                const polledSession = polledSessionResult.rows[0];
-
-                if (polledSession?.preview_url) {
-                  push("preview.ready", {
-                    previewUrl: polledSession.preview_url,
-                    previewReachable: true,
+                  push("preview.status", {
+                    message: event.message,
                   });
-                  previewReady = true;
-                  break;
+                });
+
+                await query(
+                  "update project_sessions set preview_url = $1, preview_port = $2, session_status = $3, updated_at = $4 where id = $5",
+                  [preview.previewUrl, preview.previewPort, "ready", new Date(), activeProjectSession.id],
+                );
+
+                push("preview.ready", {
+                  previewUrl: preview.previewUrl,
+                  previewReachable: preview.previewReachable,
+                });
+              } else {
+                let previewReady = false;
+
+                for (let index = 0; index < 60; index += 1) {
+                  await new Promise((resolve) => setTimeout(resolve, 1000));
+
+                  const polledSessionResult = await query<{
+                    preview_url: string | null;
+                    session_status: string;
+                  }>(
+                    "select preview_url, session_status from project_sessions where id = $1 limit 1",
+                    [activeProjectSession.id],
+                  );
+                  const polledSession = polledSessionResult.rows[0];
+
+                  if (polledSession?.preview_url) {
+                    push("preview.ready", {
+                      previewUrl: polledSession.preview_url,
+                      previewReachable: true,
+                    });
+                    previewReady = true;
+                    break;
+                  }
+
+                  if (polledSession?.session_status === "failed") {
+                    throw new Error("Preview startup failed");
+                  }
                 }
 
-                if (polledSession?.session_status === "failed") {
-                  throw new Error("Preview startup failed");
+                if (!previewReady) {
+                  throw new Error("Preview startup timed out");
                 }
-              }
-
-              if (!previewReady) {
-                throw new Error("Preview startup timed out");
               }
             }
           }

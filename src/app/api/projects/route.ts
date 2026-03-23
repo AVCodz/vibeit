@@ -12,6 +12,23 @@ type ProjectRow = {
   created_at: string;
 };
 
+function resolveThumbnailUrl(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  if (value.startsWith("http://") || value.startsWith("https://")) {
+    return value;
+  }
+
+  const publicBase = process.env.R2_PUBLIC_BASE_URL;
+  if (!publicBase) {
+    return null;
+  }
+
+  return `${publicBase.replace(/\/$/, "")}/${value.replace(/^\//, "")}`;
+}
+
 export async function GET(request: Request) {
   const session = await auth.api.getSession({ headers: request.headers });
 
@@ -41,7 +58,7 @@ export async function GET(request: Request) {
       name: row.name,
       description: row.description,
       status: row.status,
-      thumbnailUrl: row.thumbnail_url,
+      thumbnailUrl: resolveThumbnailUrl(row.thumbnail_url),
       lastOpenedAt: row.last_opened_at,
       updatedAt: row.updated_at,
       createdAt: row.created_at,

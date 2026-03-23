@@ -128,7 +128,7 @@ async function runWorkspaceBootstrapCommands(box: Box, onProgress?: ProgressCall
 
   await streamExecCommand(
     box,
-    `cd ${WORKDIR} && npm install --no-fund --no-audit`,
+    `cd ${WORKDIR} && if [ -f pnpm-lock.yaml ]; then corepack pnpm install --frozen-lockfile || corepack pnpm install; else npm install --no-fund --no-audit; fi`,
     "install.dependencies",
     "Installing dependencies...",
     onProgress,
@@ -203,6 +203,11 @@ export async function isProjectPreviewHealthy(box: Box): Promise<boolean> {
     `node -e "fetch('http://127.0.0.1:${DEV_PORT}').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"`,
   );
 
+  return run.status === "completed";
+}
+
+export async function isBoxReachable(box: Box): Promise<boolean> {
+  const run = await box.exec.command("true");
   return run.status === "completed";
 }
 

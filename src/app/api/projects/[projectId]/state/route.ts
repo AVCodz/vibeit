@@ -48,7 +48,10 @@ export async function GET(
     return Response.json({ error: "Project not found" }, { status: 404 });
   }
 
-  const hasActiveSession = Boolean(state.upstash_box_id && state.session_status !== "closed");
+  const hasActiveSession = Boolean(
+    state.upstash_box_id &&
+      ["bootstrapped", "starting_preview", "ready"].includes(state.session_status ?? ""),
+  );
   const workspaceReady = ["bootstrapped", "starting_preview", "ready"].includes(
     state.session_status ?? "",
   );

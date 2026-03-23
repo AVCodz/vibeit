@@ -281,11 +281,35 @@ export async function uploadProjectThumbnail(params: {
 }
 
 export async function capturePreviewThumbnail(previewUrl: string) {
-  const target = `https://image.thum.io/get/width/1280/noanimate/${encodeURIComponent(previewUrl)}`;
-  const response = await fetch(target, { cache: "no-store" });
+  const accessKey = process.env.SCREENSHOTONE_ACCESS_KEY;
+
+  if (!accessKey) {
+    throw new Error("SCREENSHOTONE_ACCESS_KEY is not set");
+  }
+
+  const query = new URLSearchParams({
+    access_key: accessKey,
+    url: previewUrl,
+    format: "webp",
+    viewport_width: "1280",
+    viewport_height: "720",
+    image_width: "1280",
+    image_height: "720",
+    device_scale_factor: "1",
+    block_ads: "true",
+    block_cookie_banners: "true",
+    block_chats: "true",
+    timeout: "30",
+    cache: "false",
+  });
+
+  const response = await fetch(`https://api.screenshotone.com/take?${query.toString()}`, {
+    cache: "no-store",
+  });
 
   if (!response.ok) {
-    throw new Error("Unable to capture preview thumbnail");
+    const errorBody = await response.text();
+    throw new Error(`Unable to capture preview thumbnail: ${response.status} ${errorBody}`);
   }
 
   const arrayBuffer = await response.arrayBuffer();
