@@ -280,6 +280,35 @@ export async function uploadProjectThumbnail(params: {
   return key;
 }
 
+export async function deleteAllProjectR2Objects(r2Prefix: string): Promise<{ deleted: number }> {
+  const client = getR2Client();
+  const bucket = getBucketName();
+  const keys = await listR2Keys(r2Prefix);
+
+  if (keys.length === 0) {
+    return { deleted: 0 };
+  }
+
+  const BATCH_SIZE = 1000;
+  let deleted = 0;
+
+  for (let i = 0; i < keys.length; i += BATCH_SIZE) {
+    const batch = keys.slice(i, i + BATCH_SIZE);
+    await client.send(
+      new DeleteObjectsCommand({
+        Bucket: bucket,
+        Delete: {
+          Objects: batch.map((key) => ({ Key: key })),
+          Quiet: true,
+        },
+      }),
+    );
+    deleted += batch.length;
+  }
+
+  return { deleted };
+}
+
 export async function capturePreviewThumbnail(previewUrl: string) {
   const accessKey = process.env.SCREENSHOTONE_ACCESS_KEY;
 
