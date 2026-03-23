@@ -51,3 +51,10 @@
 - Record audio from the user's microphone, send it to the OpenAI Whisper API for transcription.
 - Insert the transcribed text into the prompt input field.
 - Handle permission prompts, recording state UI, and error states gracefully.
+
+## 8) @file mentions in chat for agent context
+- Allow users to type `@` in the prompt input to get an autocomplete dropdown of project files (from the file tree / `project_files` metadata).
+- Selected files appear as chips/tags in the prompt bar (e.g. `@src/App.tsx`).
+- When the prompt is sent, the backend reads the contents of the mentioned files from the active box and prepends them to the agent prompt as context (e.g. wrapped in a `<file path="...">` block).
+- This gives the agent explicit awareness of specific files the user wants changed or referenced, reducing blind edits and hallucinated imports.
+- Autocomplete should support fuzzy matching and show file paths relative to the workspace root.
