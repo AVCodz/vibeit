@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSession } from "@/lib/auth-client";
+import { useProjectsCache } from "@/hooks/use-projects-cache";
 import { HiFolderOpen, HiClock } from "react-icons/hi2";
 import { HiEllipsisVertical, HiPencil, HiTrash } from "react-icons/hi2";
 import {
@@ -33,17 +34,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-type Project = {
-  id: string;
-  name: string;
-  description: string | null;
-  status: string;
-  thumbnailUrl: string | null;
-  lastOpenedAt: string | null;
-  updatedAt: string;
-  createdAt: string;
-};
-
 function formatCreatedAt(dateString: string) {
   const date = new Date(dateString);
   return date.toLocaleDateString("en-US", {
@@ -56,15 +46,14 @@ function formatCreatedAt(dateString: string) {
 export default function ProjectsPage() {
   const router = useRouter();
   const { data: session, isPending } = useSession();
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState("");
+  const { projects, isLoading, error, fetchAndSync, renameProject, removeProject } =
+    useProjectsCache();
 
-  const [renameTarget, setRenameTarget] = useState<Project | null>(null);
+  const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null);
   const [renameName, setRenameName] = useState("");
   const [renaming, setRenaming] = useState(false);
 
-  const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [openDropdownId, setOpenDropdownId] = useState<string | null>(null);
 
@@ -78,11 +67,7 @@ export default function ProjectsPage() {
         body: JSON.stringify({ name: renameName.trim() }),
       });
       if (res.ok) {
-        setProjects((prev) =>
-          prev.map((p) =>
-            p.id === renameTarget.id ? { ...p, name: renameName.trim() } : p,
-          ),
-        );
+        renameProject(renameTarget.id, renameName.trim());
       }
     } finally {
       setRenaming(false);
@@ -98,7 +83,7 @@ export default function ProjectsPage() {
         method: "DELETE",
       });
       if (res.ok) {
-        setProjects((prev) => prev.filter((p) => p.id !== deleteTarget.id));
+        removeProject(deleteTarget.id);
       }
     } finally {
       setDeleting(false);
@@ -108,34 +93,12 @@ export default function ProjectsPage() {
 
   useEffect(() => {
     if (isPending) return;
-
     if (!session?.user) {
       router.push("/auth");
       return;
     }
-
-    async function fetchProjects() {
-      try {
-        const response = await fetch("/api/projects", { cache: "no-store" });
-        const data = (await response.json()) as {
-          projects?: Project[];
-          error?: string;
-        };
-
-        if (!response.ok || !data.projects) {
-          throw new Error(data.error ?? "Failed to load projects");
-        }
-
-        setProjects(data.projects);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load projects");
-      } finally {
-        setIsLoading(false);
-      }
-    }
-
-    void fetchProjects();
-  }, [isPending, session, router]);
+    void fetchAndSync();
+  }, [isPending, session, router, fetchAndSync]);
 
   if (isPending) return null;
 
