@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { generateProjectNameFromPrompt } from "@/lib/openrouter";
 import { restoreProjectWorkspaceFromR2 } from "@/lib/r2";
 import {
+  applyProjectEnvVarsToBox,
   bootstrapProjectBox,
   deleteBoxById,
   ensureProjectPreview,
@@ -143,6 +144,8 @@ export async function POST(
               }
 
               if (!previewUrl && !hasPendingInitialRun) {
+                await applyProjectEnvVarsToBox(existingBox, project.id);
+
                 push("open.status", {
                   step: "start.preview",
                   message: "Starting preview server...",

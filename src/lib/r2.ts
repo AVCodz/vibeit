@@ -53,7 +53,11 @@ function normalizePath(path: string) {
 
 function isIgnoredPath(path: string) {
   const normalized = normalizePath(path);
+  const parts = normalized.split("/");
+  const fileName = parts[parts.length - 1] ?? "";
+
   return (
+    fileName.startsWith(".env") ||
     normalized === "node_modules" ||
     normalized.startsWith("node_modules/") ||
     normalized.includes("/node_modules/") ||

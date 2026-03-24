@@ -6,21 +6,27 @@ import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { AgentStatusLoader } from "@/components/ui/agent-status-loader";
 import type { AgentPhase } from "@/components/ui/agent-status-loader";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
+  HiCheck,
   HiArrowDown,
   HiArrowLeft,
   HiArrowPath,
   HiChevronDown,
   HiChevronRight,
+  HiCog6Tooth,
   HiCommandLine,
   HiCodeBracket,
   HiEye,
+  HiEyeSlash,
   HiFolderOpen,
   HiOutlineArrowTopRightOnSquare,
+  HiPlus,
   HiSparkles,
+  HiTrash,
   HiXMark,
 } from "react-icons/hi2";
 import {
@@ -39,7 +45,9 @@ import {
 import type { Terminal as XTermInstance } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 
-type WorkspaceTab = "preview" | "files";
+type WorkspaceTab = "preview" | "files" | "settings";
+
+type SettingsSection = "environment";
 
 type RunMode = "build" | "plan";
 
@@ -62,6 +70,12 @@ type FileNode = {
   path: string;
   isDir: boolean;
   children: FileNode[];
+};
+
+type ProjectEnvVar = {
+  id: string;
+  key: string;
+  value: string;
 };
 
 const PROJECT_UI_CACHE_VERSION = 1;
@@ -187,6 +201,22 @@ function toolEventRequiresPreviewReload(toolName: string, input: unknown) {
 
 function randomId() {
   return crypto.randomUUID();
+}
+
+function createProjectEnvVar(key = "", value = ""): ProjectEnvVar {
+  return {
+    id: randomId(),
+    key,
+    value,
+  };
+}
+
+function toProjectEnvRows(entries: Array<{ key: string; value: string }>) {
+  if (entries.length === 0) {
+    return [createProjectEnvVar()];
+  }
+
+  return entries.map((entry) => createProjectEnvVar(entry.key, entry.value));
 }
 
 function getLanguageFromPath(path: string) {
@@ -383,6 +413,7 @@ export default function ProjectWorkspacePage() {
   const projectId = Array.isArray(params.projectId) ? params.projectId[0] : params.projectId;
 
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("preview");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("environment");
   const [projectName, setProjectName] = useState("");
   const [isProjectNameLoading, setIsProjectNameLoading] = useState(true);
   const [previewUrl, setPreviewUrl] = useState("");
@@ -413,6 +444,10 @@ export default function ProjectWorkspacePage() {
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({
     src: true,
   });
+  const [envVars, setEnvVars] = useState<ProjectEnvVar[]>([createProjectEnvVar()]);
+  const [isEnvVarsLoading, setIsEnvVarsLoading] = useState(true);
+  const [isSavingEnvVars, setIsSavingEnvVars] = useState(false);
+  const [showEnvValues, setShowEnvValues] = useState(false);
 
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
@@ -425,6 +460,10 @@ export default function ProjectWorkspacePage() {
 
   const selectedFile = useMemo(() => files.find((file) => file.path === selectedFilePath), [files, selectedFilePath]);
   const fileTree = useMemo(() => buildFileTree(files), [files]);
+  const configuredEnvVarCount = useMemo(
+    () => envVars.filter((entry) => entry.key.trim().length > 0).length,
+    [envVars],
+  );
 
   const toggleFolder = useCallback((path: string) => {
     setExpandedFolders((current) => ({
@@ -471,6 +510,33 @@ export default function ProjectWorkspacePage() {
       if (!options?.silent) {
         setIsMessagesLoading(false);
       }
+    }
+  }, [projectId]);
+
+  const loadEnvVars = useCallback(async () => {
+    if (!projectId) {
+      return;
+    }
+
+    setIsEnvVarsLoading(true);
+
+    try {
+      const response = await fetch(`/api/projects/${projectId}/env`, { cache: "no-store" });
+      const data = (await response.json()) as {
+        envVars?: Array<{ key: string; value: string }>;
+        error?: string;
+      };
+
+      if (!response.ok || !Array.isArray(data.envVars)) {
+        throw new Error(data.error ?? "Failed to load environment variables");
+      }
+
+      setEnvVars(toProjectEnvRows(data.envVars));
+    } catch (error) {
+      setEnvVars([createProjectEnvVar()]);
+      setActivity(error instanceof Error ? error.message : "Failed to load environment variables");
+    } finally {
+      setIsEnvVarsLoading(false);
     }
   }, [projectId]);
 
@@ -719,6 +785,94 @@ export default function ProjectWorkspacePage() {
       ];
     });
   }, [projectId]);
+
+  const updateEnvVar = useCallback((id: string, field: "key" | "value", value: string) => {
+    setEnvVars((current) =>
+      current.map((entry) =>
+        entry.id === id
+          ? {
+              ...entry,
+              [field]: value,
+            }
+          : entry,
+      ),
+    );
+  }, []);
+
+  const addEnvVarRow = useCallback(() => {
+    setEnvVars((current) => [...current, createProjectEnvVar()]);
+  }, []);
+
+  const removeEnvVarRow = useCallback((id: string) => {
+    setEnvVars((current) => {
+      const next = current.filter((entry) => entry.id !== id);
+      return next.length > 0 ? next : [createProjectEnvVar()];
+    });
+  }, []);
+
+  const handleSaveEnvVars = useCallback(async () => {
+    if (!projectId) {
+      return;
+    }
+
+    setIsSavingEnvVars(true);
+    setActivity("Saving environment variables...");
+
+    try {
+      const response = await fetch(`/api/projects/${projectId}/env`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          envVars: envVars.map((entry) => ({
+            key: entry.key,
+            value: entry.value,
+          })),
+        }),
+      });
+
+      const data = (await response.json()) as {
+        envVars?: Array<{ key: string; value: string }>;
+        previewRestarted?: boolean;
+        previewUrl?: string | null;
+        restartError?: string | null;
+        error?: string;
+      };
+
+      if (!response.ok || !Array.isArray(data.envVars)) {
+        throw new Error(data.error ?? "Failed to save environment variables");
+      }
+
+      setEnvVars(toProjectEnvRows(data.envVars));
+
+      if (typeof data.previewUrl === "string" && data.previewUrl.length > 0) {
+        setPreviewUrlWithRoute(data.previewUrl);
+      }
+
+      if (data.previewRestarted) {
+        setPreviewNonce((value) => value + 1);
+        setActivity("Environment variables saved and preview restarted");
+        pushTerminalLog("[preview] Restarted preview to apply environment variable changes.");
+        return;
+      }
+
+      if (typeof data.restartError === "string" && data.restartError.length > 0) {
+        setActivity("Environment variables saved, but preview restart failed");
+        pushTerminalLog(`[error] ${data.restartError}`);
+        return;
+      }
+
+      setActivity("Environment variables saved");
+      pushTerminalLog("[preview] Environment variables saved. They will apply on the next preview start.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to save environment variables";
+      setActivity(message);
+      pushTerminalLog(`[error] ${message}`);
+    } finally {
+      setIsSavingEnvVars(false);
+    }
+  }, [envVars, projectId, pushTerminalLog, setPreviewUrlWithRoute]);
 
   const runPrompt = useCallback(async (
     prompt: string,
@@ -1326,6 +1480,14 @@ export default function ProjectWorkspacePage() {
   }, [loadMessages, projectId]);
 
   useEffect(() => {
+    if (!projectId) {
+      return;
+    }
+
+    void loadEnvVars();
+  }, [loadEnvVars, projectId]);
+
+  useEffect(() => {
     if (!selectedFile || selectedFile.isDir || typeof selectedFile.content === "string") {
       return;
     }
@@ -1471,7 +1633,7 @@ export default function ProjectWorkspacePage() {
 
   return (
     <main className="min-h-screen bg-background text-foreground">
-      <div className="mx-auto grid min-h-screen w-full max-w-[1800px] grid-cols-1 gap-3 p-3 lg:grid-cols-[420px_1fr]">
+      <div className="mx-auto grid min-h-screen w-full max-w-450 grid-cols-1 gap-3 p-3 lg:grid-cols-[420px_1fr]">
         <section className="flex h-[calc(100dvh-1.5rem)] min-h-0 flex-col overflow-hidden rounded-2xl border border-border/70 bg-card/60 p-4">
           <div className="mb-4 flex items-center justify-between">
             <div>
@@ -1521,7 +1683,7 @@ export default function ProjectWorkspacePage() {
                 >
                   {message.role === "assistant" ? (
                     message.content ? (
-                      <div className="prose prose-sm prose-invert max-w-none break-words prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 prose-headings:mb-2 prose-headings:mt-3 prose-pre:my-2 prose-pre:rounded-lg prose-pre:bg-neutral-900 prose-pre:p-3 prose-code:rounded prose-code:bg-neutral-800 prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[13px] prose-code:before:content-none prose-code:after:content-none">
+                      <div className="prose prose-sm prose-invert max-w-none wrap-break-word prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 prose-headings:mb-2 prose-headings:mt-3 prose-pre:my-2 prose-pre:rounded-lg prose-pre:bg-neutral-900 prose-pre:p-3 prose-code:rounded prose-code:bg-neutral-800 prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[13px] prose-code:before:content-none prose-code:after:content-none">
                         <ReactMarkdown
                           remarkPlugins={[remarkGfm]}
                           components={{
@@ -1566,7 +1728,7 @@ export default function ProjectWorkspacePage() {
                       <AgentStatusLoader phase={agentPhase} detail={agentDetail} className="py-0.5 text-sm" />
                     )
                   ) : (
-                    <div className="prose prose-sm prose-invert max-w-none break-words text-white prose-p:my-1.5 prose-p:text-white prose-ul:my-1.5 prose-ul:text-white prose-ol:my-1.5 prose-ol:text-white prose-li:my-0.5 prose-li:text-white prose-li:marker:text-white prose-headings:mb-2 prose-headings:mt-3 prose-headings:text-white prose-strong:text-white prose-pre:my-2 prose-pre:rounded-lg prose-pre:bg-blue-900/40 prose-pre:p-3 prose-code:rounded prose-code:bg-blue-900/30 prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[13px] prose-code:text-white prose-code:before:content-none prose-code:after:content-none">
+                    <div className="prose prose-sm prose-invert max-w-none wrap-break-word text-white prose-p:my-1.5 prose-p:text-white prose-ul:my-1.5 prose-ul:text-white prose-ol:my-1.5 prose-ol:text-white prose-li:my-0.5 prose-li:text-white prose-li:marker:text-white prose-headings:mb-2 prose-headings:mt-3 prose-headings:text-white prose-strong:text-white prose-pre:my-2 prose-pre:rounded-lg prose-pre:bg-blue-900/40 prose-pre:p-3 prose-code:rounded prose-code:bg-blue-900/30 prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[13px] prose-code:text-white prose-code:before:content-none prose-code:after:content-none">
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
                         components={{
@@ -1684,6 +1846,14 @@ export default function ProjectWorkspacePage() {
               >
                 <HiCodeBracket className="size-4" />
                 Files
+              </Button>
+              <Button
+                size="sm"
+                variant={activeTab === "settings" ? "default" : "secondary"}
+                onClick={() => setActiveTab("settings")}
+              >
+                <HiCog6Tooth className="size-4" />
+                Settings
               </Button>
             </div>
 
@@ -1841,19 +2011,157 @@ export default function ProjectWorkspacePage() {
                   />
                 </div>
               </div>
+
+              <div className={cn("grid h-full min-h-0 grid-cols-1 overflow-hidden lg:grid-cols-[260px_1fr]", activeTab === "settings" ? "grid" : "hidden")}>
+                <aside className="overflow-y-auto border-b border-border/70 bg-background/50 p-3 lg:border-b-0 lg:border-r">
+                  <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
+                    <HiCog6Tooth className="size-4" />
+                    Settings
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setSettingsSection("environment")}
+                    className={cn(
+                      "flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left transition-colors",
+                      settingsSection === "environment"
+                        ? "border-blue-500/50 bg-blue-500/10 text-foreground"
+                        : "border-border/60 bg-background/60 text-muted-foreground hover:bg-secondary/60",
+                    )}
+                  >
+                    <div>
+                      <div className="text-sm font-medium">Environment</div>
+                      <div className="text-xs text-muted-foreground">Secrets and runtime config</div>
+                    </div>
+                    <span className="rounded-full border border-border/60 px-2 py-0.5 text-[11px]">
+                      {configuredEnvVarCount}
+                    </span>
+                  </button>
+                </aside>
+
+                <div className="min-h-0 overflow-y-auto p-4">
+                  <div className="mx-auto flex max-w-4xl flex-col gap-4">
+                    <div className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-background/60 p-4">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 text-sm font-semibold">
+                            <HiCheck className="size-4 text-emerald-400" />
+                            Environment variables
+                          </div>
+                          <p className="max-w-2xl text-sm text-muted-foreground">
+                            Values are stored encrypted, written into the box as `.env.local`, and the preview server is restarted after save.
+                          </p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => setShowEnvValues((value) => !value)}
+                          >
+                            {showEnvValues ? <HiEyeSlash className="size-4" /> : <HiEye className="size-4" />}
+                            {showEnvValues ? "Hide values" : "Show values"}
+                          </Button>
+                          <Button type="button" size="sm" variant="secondary" onClick={addEnvVarRow}>
+                            <HiPlus className="size-4" />
+                            Add variable
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={handleSaveEnvVars}
+                            disabled={isEnvVarsLoading || isSavingEnvVars}
+                          >
+                            {isSavingEnvVars ? "Saving..." : "Save env vars"}
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-border/60 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
+                        Use standard keys like `DATABASE_URL`, `OPENAI_API_KEY`, or `NEXT_PUBLIC_API_URL`. Empty rows are ignored.
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-border/70 bg-background/60 p-4">
+                      {isEnvVarsLoading ? (
+                        <div className="space-y-3">
+                          {[0, 1, 2].map((index) => (
+                            <div key={index} className="grid gap-3 rounded-xl border border-border/60 p-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto]">
+                              <div className="h-10 animate-pulse rounded-md bg-secondary/60" />
+                              <div className="h-10 animate-pulse rounded-md bg-secondary/60" />
+                              <div className="h-10 w-10 animate-pulse rounded-md bg-secondary/60" />
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {envVars.map((entry, index) => (
+                            <div
+                              key={entry.id}
+                              className="grid gap-3 rounded-xl border border-border/60 p-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_auto]"
+                            >
+                              <div className="space-y-1.5">
+                                <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                                  Key
+                                </label>
+                                <Input
+                                  value={entry.key}
+                                  onChange={(event) => updateEnvVar(entry.id, "key", event.target.value)}
+                                  placeholder="DATABASE_URL"
+                                  autoCapitalize="off"
+                                  autoCorrect="off"
+                                  spellCheck={false}
+                                />
+                              </div>
+
+                              <div className="space-y-1.5">
+                                <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                                  Value
+                                </label>
+                                <Input
+                                  type={showEnvValues ? "text" : "password"}
+                                  value={entry.value}
+                                  onChange={(event) => updateEnvVar(entry.id, "value", event.target.value)}
+                                  placeholder="Enter secret value"
+                                  autoCapitalize="off"
+                                  autoCorrect="off"
+                                  spellCheck={false}
+                                />
+                              </div>
+
+                              <div className="flex items-end justify-end">
+                                <Button
+                                  type="button"
+                                  size="icon-sm"
+                                  variant="ghost"
+                                  onClick={() => removeEnvVarRow(entry.id)}
+                                  aria-label={`Remove environment variable row ${index + 1}`}
+                                >
+                                  <HiTrash className="size-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
 
             {isTerminalOpen ? (
-              <div className="h-[38%] min-h-[180px] max-h-[420px] border-t border-border/70 bg-[#090a0a] p-3">
+              <div className="h-[38%] min-h-45 max-h-105 border-t border-border/70 bg-[#090a0a] p-3">
                 <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-wide text-muted-foreground">
                   <div className="flex items-center gap-2">
                     <HiCommandLine className="size-4" />
                     <span>Terminal</span>
                   </div>
                   <div className="flex items-center gap-2">
-                    {/* <span className="text-[10px] text-muted-foreground/70">
+                    <span className="text-[10px] text-muted-foreground/70">
                       {activeRunId ? `Run ${activeRunId.slice(0, 8)}` : "Read only"}
-                    </span> */}
+                    </span>
                     <Button
                       variant="ghost"
                       size="icon-sm"

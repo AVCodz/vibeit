@@ -17,6 +17,22 @@ type FileEntry = {
 
 const NORMALIZED_WORKDIR = WORKDIR.replace(/^\/+|\/+$/g, "");
 
+function isHiddenWorkspacePath(path: string) {
+  const normalized = path.replace(/^\/+/, "");
+  const parts = normalized.split("/");
+  const fileName = parts[parts.length - 1] ?? "";
+
+  return (
+    fileName.startsWith(".env") ||
+    normalized === "node_modules" ||
+    normalized.startsWith("node_modules/") ||
+    normalized.includes("/node_modules/") ||
+    normalized === ".git" ||
+    normalized.startsWith(".git/") ||
+    normalized.includes("/.git/")
+  );
+}
+
 function toRelativePath(path: string) {
   const normalized = path.replace(/^\/+/, "");
 
@@ -40,18 +56,7 @@ async function listRecursive(
 
   for (const entry of entries) {
     const normalized = toRelativePath(entry.path);
-    if (!normalized) {
-      continue;
-    }
-
-    if (
-      normalized === "node_modules" ||
-      normalized.startsWith("node_modules/") ||
-      normalized.includes("/node_modules/") ||
-      normalized === ".git" ||
-      normalized.startsWith(".git/") ||
-      normalized.includes("/.git/")
-    ) {
+    if (!normalized || isHiddenWorkspacePath(normalized)) {
       continue;
     }
 

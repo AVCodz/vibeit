@@ -3,13 +3,15 @@ import { auth } from "@/lib/auth";
 import { generateProjectNameFromPrompt } from "@/lib/openrouter";
 import { syncProjectFilesMetadata } from "@/lib/project-files";
 import { syncProjectWorkspaceToR2 } from "@/lib/r2";
-import { ensureProjectPreview, getBoxById, isProjectPreviewHealthy, WORKDIR } from "@/lib/upstash-box";
+import { applyProjectEnvVarsToBox, ensureProjectPreview, getBoxById, isProjectPreviewHealthy, WORKDIR } from "@/lib/upstash-box";
+
+type RunMode = "build" | "plan";
 
 type RunStreamBody = {
   prompt?: string;
   userMessageId?: string;
   assistantMessageId?: string;
-  mode?: "build" | "plan";
+  mode?: RunMode;
 };
 
 type ProjectMessageRow = {
@@ -21,6 +23,39 @@ type ProjectMessageRow = {
 
 function sseEvent(event: string, data: unknown) {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+const OPEN_CODE_PLATFORM_RULES = [
+  "You are VibeIt's OpenCode agent inside a Vite React TypeScript project in the current directory.",
+  "This platform only supports Vite React TypeScript projects.",
+  "Keep changes inside this project only.",
+  "Prefer editing existing React files instead of creating standalone HTML files.",
+  "Never create, modify, or commit `.env`, `.env.local`, `.env.*`, or other local secret files.",
+  "When environment variables are needed, tell the user to add them in the Settings tab for this project instead of writing them to files.",
+  "Assume project environment variables are injected by the platform after the user saves them in Settings.",
+  "Never hardcode API keys, tokens, passwords, or other secrets in source files, examples, or fallback values.",
+] as const;
+
+function buildOpenCodeRuntimePrompt(mode: RunMode, prompt: string) {
+  const promptParts =
+    mode === "plan"
+      ? [
+          ...OPEN_CODE_PLATFORM_RULES,
+          "You are in PLAN MODE.",
+          "Do not modify files.",
+          "Do not run shell commands that change project state.",
+          "If the task requires environment variables, explicitly tell the user to add them in the Settings tab.",
+          "Return a concise implementation plan, key file touchpoints, and acceptance checklist.",
+          prompt,
+        ]
+      : [
+          ...OPEN_CODE_PLATFORM_RULES,
+          "Implement the requested changes directly in this project.",
+          "If environment variables are required, explain which variables are needed and direct the user to the Settings tab.",
+          prompt,
+        ];
+
+  return promptParts.join("\n\n");
 }
 
 export async function POST(
@@ -205,21 +240,7 @@ export async function POST(
           const box = await getBoxById(boxId);
           await box.cd(WORKDIR);
 
-          const runtimePrompt =
-            mode === "plan"
-              ? [
-                  "You are in PLAN MODE for a Vite React TypeScript project.",
-                  "Do not modify files.",
-                  "Do not run shell commands that change project state.",
-                  "Return a concise implementation plan, key file touchpoints, and acceptance checklist.",
-                  prompt,
-                ].join("\n\n")
-              : [
-                  "You are working inside a Vite React TypeScript project in the current directory.",
-                  "Keep changes inside this project only.",
-                  "Prefer editing existing React files instead of creating standalone HTML files.",
-                  prompt,
-                ].join("\n\n");
+          const runtimePrompt = buildOpenCodeRuntimePrompt(mode, prompt);
 
           const agentStream = await box.agent.stream({ prompt: runtimePrompt });
 
@@ -348,6 +369,8 @@ export async function POST(
               );
 
               if (previewLockResult.rows[0]) {
+                await applyProjectEnvVarsToBox(box, project.id);
+
                 push("preview.status", {
                   message: "Starting preview server...",
                 });

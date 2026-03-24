@@ -1,7 +1,10 @@
 import { Agent, Box, BoxApiKey, OpenCodeModel } from "@upstash/box";
+import { formatProjectEnvFile, getProjectEnvMap } from "@/lib/project-env";
 
 export const WORKDIR = "/workspace/home/work";
 export const DEV_PORT = 5173;
+
+const PREVIEW_PID_FILE = "/tmp/vibeit-preview.pid";
 
 type BootstrapProjectBoxInput = {
   projectId: string;
@@ -37,6 +40,12 @@ function getOpenCodeModel() {
 }
 
 type ProgressCallback = (event: BootstrapProgressEvent) => void;
+
+const PREVIEW_HEALTHCHECK_COMMAND = `node -e "fetch('http://127.0.0.1:${DEV_PORT}').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"`;
+
+const PREVIEW_START_COMMAND = `cd ${WORKDIR} && ${PREVIEW_HEALTHCHECK_COMMAND} || (if [ -f pnpm-lock.yaml ]; then PM='corepack pnpm'; else PM='npm'; fi; if node -e "const pkg=require('./package.json'); process.exit(typeof pkg.scripts?.dev === 'string' && pkg.scripts.dev.includes('next dev') ? 0 : 1)"; then FLAGS='-- --hostname 0.0.0.0 --port ${DEV_PORT}'; else FLAGS='-- --host 0.0.0.0 --port ${DEV_PORT} --strictPort'; fi; nohup sh -lc "$PM run dev $FLAGS" > /tmp/vite.log 2>&1 & echo $! > ${PREVIEW_PID_FILE})`;
+
+const PREVIEW_WAIT_COMMAND = `for i in $(seq 1 60); do ${PREVIEW_HEALTHCHECK_COMMAND} && exit 0; sleep 1; done; cat /tmp/vite.log; exit 1`;
 
 async function streamExecCommand(
   box: Box,
@@ -135,10 +144,38 @@ async function runWorkspaceBootstrapCommands(box: Box, onProgress?: ProgressCall
   );
 }
 
+async function writeProjectEnvFile(box: Box, envMap: Record<string, string>) {
+  await box.cd(WORKDIR);
+
+  const entries = Object.entries(envMap)
+    .map(([key, value]) => ({ key, value }))
+    .sort((a, b) => a.key.localeCompare(b.key));
+
+  if (entries.length === 0) {
+    await box.exec.command(`cd ${WORKDIR} && rm -f .env.local`);
+    return;
+  }
+
+  await box.files.write({
+    path: ".env.local",
+    content: formatProjectEnvFile(entries),
+  });
+}
+
+async function stopPreviewServer(box: Box, onProgress?: ProgressCallback) {
+  await runExecCommand(
+    box,
+    `cd ${WORKDIR} && PID="$(cat ${PREVIEW_PID_FILE} 2>/dev/null || true)"; case "$PID" in ''|*[!0-9]*) ;; *) kill "$PID" 2>/dev/null || true; sleep 1; kill -9 "$PID" 2>/dev/null || true ;; esac; rm -f /tmp/vite.log ${PREVIEW_PID_FILE}`,
+    "stop.devserver",
+    "Restarting preview server...",
+    onProgress,
+  );
+}
+
 async function startPreviewServer(box: Box, onProgress?: ProgressCallback) {
   await runExecCommand(
     box,
-    `cd ${WORKDIR} && node -e "fetch('http://127.0.0.1:${DEV_PORT}').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))" || nohup npm run dev -- --host 0.0.0.0 --port ${DEV_PORT} --strictPort > /tmp/vite.log 2>&1 &`,
+    PREVIEW_START_COMMAND,
     "start.devserver",
     "Starting preview server...",
     onProgress,
@@ -146,7 +183,7 @@ async function startPreviewServer(box: Box, onProgress?: ProgressCallback) {
 
   await runExecCommand(
     box,
-    `for i in $(seq 1 60); do node -e "fetch('http://127.0.0.1:${DEV_PORT}').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))" && exit 0; sleep 1; done; cat /tmp/vite.log; exit 1`,
+    PREVIEW_WAIT_COMMAND,
     "wait.preview",
     "Waiting for preview URL...",
     onProgress,
@@ -199,11 +236,32 @@ export async function ensureProjectPreview(
 
 export async function isProjectPreviewHealthy(box: Box): Promise<boolean> {
   await box.cd(WORKDIR);
-  const run = await box.exec.command(
-    `node -e "fetch('http://127.0.0.1:${DEV_PORT}').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"`,
-  );
+  const run = await box.exec.command(PREVIEW_HEALTHCHECK_COMMAND);
 
   return run.status === "completed";
+}
+
+export async function applyProjectEnvVarsToBox(box: Box, projectId: string) {
+  const envMap = await getProjectEnvMap(projectId);
+  await writeProjectEnvFile(box, envMap);
+  return envMap;
+}
+
+export async function restartProjectPreview(
+  box: Box,
+  projectId: string,
+  onProgress?: ProgressCallback,
+): Promise<EnsurePreviewResult> {
+  onProgress?.({
+    step: "prepare.env",
+    message: "Applying environment variables...",
+    kind: "status",
+  });
+
+  await applyProjectEnvVarsToBox(box, projectId);
+  await stopPreviewServer(box, onProgress);
+
+  return ensureProjectPreview(box, onProgress);
 }
 
 export async function isBoxReachable(box: Box): Promise<boolean> {
@@ -215,9 +273,11 @@ export async function bootstrapProjectBox(
   { projectId }: BootstrapProjectBoxInput,
   options?: BootstrapOptions,
 ): Promise<BootstrapProjectBoxResult> {
+  const projectEnv = await getProjectEnvMap(projectId);
   const box = await Box.create({
     runtime: "node",
     env: {
+      ...projectEnv,
       VIBEIT_PROJECT_ID: projectId,
     },
     agent: {
@@ -232,6 +292,7 @@ export async function bootstrapProjectBox(
   }
 
   await runWorkspaceBootstrapCommands(box, options?.onProgress);
+  await writeProjectEnvFile(box, projectEnv);
 
   if (options?.skipPreviewStartup) {
     return {

@@ -12,6 +12,22 @@ type SessionRow = {
 
 const NORMALIZED_WORKDIR = WORKDIR.replace(/^\/+|\/+$/g, "");
 
+function isHiddenWorkspacePath(path: string) {
+  const normalized = path.replace(/^\/+/, "");
+  const parts = normalized.split("/");
+  const fileName = parts[parts.length - 1] ?? "";
+
+  return (
+    fileName.startsWith(".env") ||
+    normalized === "node_modules" ||
+    normalized.startsWith("node_modules/") ||
+    normalized.includes("/node_modules/") ||
+    normalized === ".git" ||
+    normalized.startsWith(".git/") ||
+    normalized.includes("/.git/")
+  );
+}
+
 function toRelativePath(path: string) {
   const normalized = path.replace(/^\/+/, "");
 
@@ -36,7 +52,7 @@ export async function GET(
   const { searchParams } = new URL(request.url);
   const path = toRelativePath((searchParams.get("path") ?? "").replace(/^\/+/, ""));
 
-  if (!path || path.includes("..")) {
+  if (!path || path.includes("..") || isHiddenWorkspacePath(path)) {
     return Response.json({ error: "Path is required" }, { status: 400 });
   }
 
