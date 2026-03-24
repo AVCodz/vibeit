@@ -108,6 +108,21 @@ export const agentRuns = pgTable("agent_runs", {
   },
 );
 
+export const projectMessages = pgTable("project_messages", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  projectId: uuid("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  runId: uuid("run_id").references(() => agentRuns.id, {
+    onDelete: "set null",
+  }),
+  role: text("role").notNull(),
+  content: text("content").notNull().default(""),
+  status: text("status").notNull().default("completed"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const projectFiles = pgTable(
   "project_files",
   {
@@ -123,6 +138,23 @@ export const projectFiles = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [unique("project_files_project_path_unique").on(table.projectId, table.path)],
+);
+
+export const projectEnvVars = pgTable(
+  "project_env_vars",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    key: text("key").notNull(),
+    encryptedValue: text("encrypted_value").notNull(),
+    iv: text("iv").notNull(),
+    authTag: text("auth_tag").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [unique("project_env_vars_project_key_unique").on(table.projectId, table.key)],
 );
 
 export const usageEvents = pgTable("usage_events", {

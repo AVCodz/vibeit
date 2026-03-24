@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import Image from "next/image";
-import { HiBars3, HiXMark } from "react-icons/hi2";
+import { HiBars3, HiXMark, HiFolderOpen, HiArrowRightOnRectangle } from "react-icons/hi2";
 import { signOut, useSession } from "@/lib/auth-client";
 
 const navLinks = [
@@ -19,6 +19,21 @@ export function Header() {
   const pathname = usePathname();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const { data: session, isPending } = useSession();
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+
+  const closeDropdown = () => {
+    if (detailsRef.current) detailsRef.current.open = false;
+  };
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (detailsRef.current && !detailsRef.current.contains(e.target as Node)) {
+        closeDropdown();
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   const closeMobileMenu = () => setIsMobileMenuOpen(false);
 
@@ -53,7 +68,7 @@ export function Header() {
 
         <div className="hidden items-center gap-2 md:flex">
           {isPending ? null : session ? (
-            <details className="relative">
+            <details ref={detailsRef} className="relative">
               <summary className="list-none cursor-pointer rounded-md border border-border/60 bg-secondary px-2 py-1 text-sm text-foreground">
                 <span className="flex items-center gap-2">
                   {session.user.image ? (
@@ -72,36 +87,48 @@ export function Header() {
                   <span className="max-w-32 truncate">{session.user.name ?? session.user.email}</span>
                 </span>
               </summary>
-              <div className="absolute right-0 mt-2 w-52 rounded-md border border-border/60 bg-secondary bg-card p-2 shadow-xl">
-                <div className="mb-1 flex items-center gap-2 px-2 py-1">
+              <div className="absolute right-0 mt-2 w-52 overflow-hidden rounded-lg border border-border/60 bg-popover p-1 shadow-xl">
+                <div className="flex items-center gap-2.5 px-2.5 py-2">
                   {session.user.image ? (
                     <Image
                       src={session.user.image}
                       alt={session.user.name ?? "User avatar"}
-                      width={28}
-                      height={28}
-                      className="size-7 rounded-md border border-border/60 bg-secondary object-cover"
+                      width={32}
+                      height={32}
+                      className="size-8 rounded-full border border-border/60 object-cover"
                     />
                   ) : (
-                    <span className="flex size-7 items-center justify-center rounded-md border border-border/60 bg-secondary bg-muted text-[10px] font-semibold uppercase text-muted-foreground">
+                    <span className="flex size-8 items-center justify-center rounded-full bg-muted text-xs font-semibold uppercase text-muted-foreground">
                       {(session.user.name ?? session.user.email ?? "U").charAt(0)}
                     </span>
                   )}
-                  <p className="max-w-[140px] truncate text-xs text-muted-foreground">
-                    {session.user.name ?? "VibeIt user"}
-                  </p>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-foreground">
+                      {session.user.name ?? "VibeIt user"}
+                    </p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      {session.user.email}
+                    </p>
+                  </div>
                 </div>
-                <p className="truncate px-2 py-1 text-xs text-muted-foreground">
-                  {session.user.email}
-                </p>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="mt-1 w-full justify-start"
-                  onClick={() => signOut()}
+                <div className="my-1 h-px bg-border/60" />
+                <Link
+                  href="/projects"
+                  onClick={closeDropdown}
+                  className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-sm text-foreground transition-colors hover:bg-accent"
                 >
+                  <HiFolderOpen className="size-4 text-muted-foreground" />
+                  Projects
+                </Link>
+                <div className="my-1 h-px bg-border/60" />
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-sm text-destructive transition-colors hover:bg-destructive/10"
+                  onClick={() => { closeDropdown(); signOut(); }}
+                >
+                  <HiArrowRightOnRectangle className="size-4" />
                   Sign out
-                </Button>
+                </button>
               </div>
             </details>
           ) : (
@@ -188,6 +215,14 @@ export function Header() {
                       <p className="truncate text-[11px] text-muted-foreground">{session.user.email}</p>
                     </div>
                   </div>
+                  <Link
+                    href="/projects"
+                    onClick={closeMobileMenu}
+                    className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+                  >
+                    <HiFolderOpen className="size-4 text-muted-foreground" />
+                    Projects
+                  </Link>
                   <Button
                     variant="ghost"
                     className="w-full justify-start"

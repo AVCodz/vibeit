@@ -15,8 +15,15 @@
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1014.0",
     "@gsap/react": "^2.1.2",
+    "@monaco-editor/react": "^4.7.0",
     "@neondatabase/serverless": "^1.0.2",
+    "@openrouter/sdk": "^0.9.11",
+    "@tailwindcss/typography": "^0.5.19",
+    "@upstash/box": "^0.1.28",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "better-auth": "^1.5.5",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -29,6 +36,8 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-icons": "^5.5.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.4.1",
     "three": "^0.182.0"
   },

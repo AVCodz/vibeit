@@ -6,6 +6,7 @@ import { DottedSurface } from "@/components/ui/dotted-surface";
 import { HiPaperClip, HiLightBulb } from "react-icons/hi2";
 import { IoSend } from "react-icons/io5";
 import { useRouter } from "next/navigation";
+import { useSession } from "@/lib/auth-client";
 
 const PROMPT_PREFIX = "Ask VibeIt to ";
 const PROMPT_SUFFIXES = [
@@ -18,8 +19,11 @@ const PROMPT_SUFFIXES = [
 export default function Home() {
   const [planActive, setPlanActive] = useState(false);
   const [promptValue, setPromptValue] = useState("");
+  const [isBootstrapping, setIsBootstrapping] = useState(false);
+  const [isEnhancing, setIsEnhancing] = useState(false);
   const hasNavigatedRef = useRef(false);
   const router = useRouter();
+  const { data: session } = useSession();
 
   const [promptIndex, setPromptIndex] = useState(0);
   const [displayedText, setDisplayedText] = useState("");
@@ -61,6 +65,104 @@ export default function Home() {
     return () => clearTimeout(timeout);
   }, [displayedText, isDeleting, promptIndex]);
 
+  const handleSend = async () => {
+    const prompt = promptValue.trim();
+
+    if (!prompt) {
+      return;
+    }
+
+    if (!session?.user) {
+      router.push("/auth");
+      return;
+    }
+
+    setIsBootstrapping(true);
+
+    try {
+      const response = await fetch("/api/projects/bootstrap", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          prompt,
+          requestId: crypto.randomUUID(),
+        }),
+      });
+
+      const data = (await response.json()) as {
+        error?: string;
+        projectId?: string;
+        previewUrl?: string;
+        projectName?: string;
+        initialUserMessage?: { id: string };
+        initialAssistantMessage?: { id: string };
+      };
+
+      if (!response.ok || !data.projectId) {
+        throw new Error(data.error ?? "Unable to bootstrap project");
+      }
+
+      const url = new URL(`/projects/${data.projectId}`, window.location.origin);
+      if (data.previewUrl) {
+        url.searchParams.set("preview", data.previewUrl);
+      }
+      if (data.projectName) {
+        url.searchParams.set("name", data.projectName);
+      }
+      url.searchParams.set("prompt", prompt);
+      if (data.initialUserMessage?.id) {
+        url.searchParams.set("umid", data.initialUserMessage.id);
+      }
+      if (data.initialAssistantMessage?.id) {
+        url.searchParams.set("amid", data.initialAssistantMessage.id);
+      }
+      url.searchParams.set("autostart", "1");
+
+      router.push(`${url.pathname}?${url.searchParams.toString()}`);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setIsBootstrapping(false);
+    }
+  };
+
+  const handleEnhance = async () => {
+    const prompt = promptValue.trim();
+
+    if (!prompt || !session?.user || isEnhancing) {
+      return;
+    }
+
+    setIsEnhancing(true);
+
+    try {
+      const response = await fetch("/api/prompts/enhance", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ prompt }),
+      });
+
+      const data = (await response.json()) as {
+        enhancedPrompt?: string;
+        error?: string;
+      };
+
+      if (!response.ok || !data.enhancedPrompt) {
+        throw new Error(data.error ?? "Unable to enhance prompt");
+      }
+
+      setPromptValue(data.enhancedPrompt);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setIsEnhancing(false);
+    }
+  };
+
   return (
     <div className="flex flex-1  flex-col items-center justify-center px-4  sm:px-6">
       <div className="pointer-events-none fixed inset-0 -z-20 h-full w-full bg-[radial-gradient(circle_at_center,rgba(200,200,200,0.10),transparent_60%)]" />
@@ -95,8 +197,10 @@ export default function Home() {
               setPromptValue(nextValue);
 
               if (!hasNavigatedRef.current && nextValue.trim().length > 0) {
-                hasNavigatedRef.current = true;
-                router.push("/auth");
+                if (!session?.user) {
+                  hasNavigatedRef.current = true;
+                  router.push("/auth");
+                }
               }
             }}
           />
@@ -115,8 +219,19 @@ export default function Home() {
                 <HiLightBulb className="size-4" />
                 Plan
               </Button>
+              {session?.user ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  type="button"
+                  onClick={() => void handleEnhance()}
+                  disabled={isEnhancing || isBootstrapping || !promptValue.trim()}
+                >
+                  {isEnhancing ? "Enhancing..." : "Enhance"}
+                </Button>
+              ) : null}
             </div>
-            <Button size="sm" type="button">
+            <Button size="sm" type="button" disabled={isBootstrapping} onClick={handleSend}>
               <IoSend className="size-4 -rotate-45 -mr-1" />
             </Button>
           </div>
