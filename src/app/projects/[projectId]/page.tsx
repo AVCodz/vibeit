@@ -82,6 +82,25 @@ const PROJECT_UI_CACHE_VERSION = 1;
 const PROJECT_UI_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
 
 const FILE_WRITE_VERBS = ["write", "edit", "create", "update", "overwrite", "patch", "save"];
+const TERMINAL_DEFAULT_HEIGHT = 360;
+const TERMINAL_MIN_HEIGHT = 180;
+const TERMINAL_AUTO_CLOSE_HEIGHT = 120;
+
+function getTerminalMaxHeight() {
+  if (typeof window === "undefined") {
+    return 520;
+  }
+
+  return Math.max(320, Math.min(560, Math.floor(window.innerHeight * 0.68)));
+}
+
+function clampTerminalHeight(height: number) {
+  return Math.min(getTerminalMaxHeight(), Math.max(TERMINAL_MIN_HEIGHT, height));
+}
+
+function clampTerminalDisplayHeight(height: number) {
+  return Math.min(getTerminalMaxHeight(), Math.max(0, height));
+}
 
 const ANSI = {
   reset: "\x1b[0m",
@@ -433,6 +452,9 @@ export default function ProjectWorkspacePage() {
   const [isWorkspaceReady, setIsWorkspaceReady] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
   const [isTerminalOpen, setIsTerminalOpen] = useState(true);
+  const [terminalHeight, setTerminalHeight] = useState(() => clampTerminalHeight(TERMINAL_DEFAULT_HEIGHT));
+  const [terminalDisplayHeight, setTerminalDisplayHeight] = useState(() => clampTerminalHeight(TERMINAL_DEFAULT_HEIGHT));
+  const [isTerminalResizing, setIsTerminalResizing] = useState(false);
   const [runMode, setRunMode] = useState<RunMode>("build");
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [queuedPrompt, setQueuedPrompt] = useState("");
@@ -451,10 +473,20 @@ export default function ProjectWorkspacePage() {
 
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const terminalResizeHandleRef = useRef<HTMLDivElement>(null);
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTermInstance | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const terminalCursorRef = useRef(0);
+  const terminalHeightFrameRef = useRef<number | null>(null);
+  const terminalPendingHeightRef = useRef<number | null>(null);
+  const terminalFitFrameRef = useRef<number | null>(null);
+  const terminalResizeStateRef = useRef<{
+    pointerId: number;
+    startY: number;
+    startHeight: number;
+    lastHeight: number;
+  } | null>(null);
   const initialPromptRan = useRef(false);
   const router = useRouter();
 
@@ -471,6 +503,167 @@ export default function ProjectWorkspacePage() {
       [path]: !current[path],
     }));
   }, []);
+
+  const flushTerminalHeightFrame = useCallback(() => {
+    if (terminalHeightFrameRef.current !== null) {
+      window.cancelAnimationFrame(terminalHeightFrameRef.current);
+      terminalHeightFrameRef.current = null;
+    }
+  }, []);
+
+  const flushTerminalDisplayHeight = useCallback((height: number) => {
+    flushTerminalHeightFrame();
+    terminalPendingHeightRef.current = null;
+    setTerminalDisplayHeight(clampTerminalDisplayHeight(height));
+  }, [flushTerminalHeightFrame]);
+
+  const scheduleTerminalDisplayHeight = useCallback((height: number) => {
+    terminalPendingHeightRef.current = clampTerminalDisplayHeight(height);
+
+    if (terminalHeightFrameRef.current !== null) {
+      return;
+    }
+
+    terminalHeightFrameRef.current = window.requestAnimationFrame(() => {
+      terminalHeightFrameRef.current = null;
+
+      if (terminalPendingHeightRef.current === null) {
+        return;
+      }
+
+      setTerminalDisplayHeight(terminalPendingHeightRef.current);
+      terminalPendingHeightRef.current = null;
+    });
+  }, []);
+
+  const scheduleTerminalFit = useCallback(() => {
+    if (terminalFitFrameRef.current !== null) {
+      return;
+    }
+
+    terminalFitFrameRef.current = window.requestAnimationFrame(() => {
+      terminalFitFrameRef.current = null;
+
+      const container = terminalContainerRef.current;
+
+      if (!container || container.clientWidth < 8 || container.clientHeight < 8) {
+        return;
+      }
+
+      fitAddonRef.current?.fit();
+    });
+  }, []);
+
+  const stopTerminalResize = useCallback(() => {
+    const resizeState = terminalResizeStateRef.current;
+    const resizeHandle = terminalResizeHandleRef.current;
+
+    if (resizeState && resizeHandle?.hasPointerCapture(resizeState.pointerId)) {
+      try {
+        resizeHandle.releasePointerCapture(resizeState.pointerId);
+      } catch {
+        // Pointer capture can already be released when the drag ends naturally.
+      }
+    }
+
+    terminalResizeStateRef.current = null;
+    setIsTerminalResizing(false);
+  }, []);
+
+  const openTerminal = useCallback(() => {
+    const nextHeight = clampTerminalHeight(terminalHeight);
+
+    setTerminalHeight(nextHeight);
+    setIsTerminalOpen(true);
+    scheduleTerminalDisplayHeight(nextHeight);
+  }, [scheduleTerminalDisplayHeight, terminalHeight]);
+
+  const closeTerminal = useCallback(() => {
+    stopTerminalResize();
+    setIsTerminalOpen(false);
+    flushTerminalDisplayHeight(0);
+  }, [flushTerminalDisplayHeight, stopTerminalResize]);
+
+  const toggleTerminal = useCallback(() => {
+    if (isTerminalOpen) {
+      closeTerminal();
+      return;
+    }
+
+    openTerminal();
+  }, [closeTerminal, isTerminalOpen, openTerminal]);
+
+  const settleTerminalHeight = useCallback((height: number) => {
+    if (height <= TERMINAL_AUTO_CLOSE_HEIGHT) {
+      closeTerminal();
+      return;
+    }
+
+    const nextHeight = clampTerminalHeight(height);
+    setTerminalHeight(nextHeight);
+    flushTerminalDisplayHeight(nextHeight);
+  }, [closeTerminal, flushTerminalDisplayHeight]);
+
+  const finishTerminalResize = useCallback((pointerId?: number) => {
+    const resizeState = terminalResizeStateRef.current;
+
+    if (!resizeState || (typeof pointerId === "number" && resizeState.pointerId !== pointerId)) {
+      return;
+    }
+
+    const lastHeight = resizeState.lastHeight;
+    stopTerminalResize();
+    settleTerminalHeight(lastHeight);
+  }, [settleTerminalHeight, stopTerminalResize]);
+
+  const handleTerminalResizeStart = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!isTerminalOpen) {
+      return;
+    }
+
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+
+    const startHeight = terminalDisplayHeight > 0 ? terminalDisplayHeight : terminalHeight;
+
+    terminalResizeStateRef.current = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      startHeight,
+      lastHeight: startHeight,
+    };
+    setIsTerminalResizing(true);
+  }, [isTerminalOpen, terminalDisplayHeight, terminalHeight]);
+
+  const handleTerminalResizeMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const resizeState = terminalResizeStateRef.current;
+
+    if (!resizeState || resizeState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    const nextHeight = clampTerminalDisplayHeight(resizeState.startHeight + (resizeState.startY - event.clientY));
+    resizeState.lastHeight = nextHeight;
+
+    if (nextHeight <= TERMINAL_AUTO_CLOSE_HEIGHT) {
+      closeTerminal();
+      return;
+    }
+
+    scheduleTerminalDisplayHeight(nextHeight);
+  }, [closeTerminal, scheduleTerminalDisplayHeight]);
+
+  const handleTerminalResizeEnd = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    finishTerminalResize(event.pointerId);
+  }, [finishTerminalResize]);
+
+  const handleTerminalResizeCancel = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    finishTerminalResize(event.pointerId);
+  }, [finishTerminalResize]);
+
+  const handleTerminalResizeLostCapture = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    finishTerminalResize(event.pointerId);
+  }, [finishTerminalResize]);
 
   const applyProjectName = useCallback((name: string) => {
     const normalized = name.trim();
@@ -1590,15 +1783,14 @@ export default function ProjectWorkspacePage() {
       fitAddonRef.current = fitAddon;
     })();
 
-    const onResize = () => {
-      fitAddonRef.current?.fit();
-    };
-
-    window.addEventListener("resize", onResize);
-
     return () => {
       cancelled = true;
-      window.removeEventListener("resize", onResize);
+
+      if (terminalFitFrameRef.current !== null) {
+        window.cancelAnimationFrame(terminalFitFrameRef.current);
+        terminalFitFrameRef.current = null;
+      }
+
       xtermRef.current?.dispose();
       xtermRef.current = null;
       fitAddonRef.current = null;
@@ -1624,12 +1816,79 @@ export default function ProjectWorkspacePage() {
   }, [terminalLogs]);
 
   useEffect(() => {
-    if (!isTerminalOpen) {
+    const container = terminalContainerRef.current;
+
+    if (!container) {
       return;
     }
 
-    fitAddonRef.current?.fit();
+    scheduleTerminalFit();
+
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      scheduleTerminalFit();
+    });
+
+    observer.observe(container);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [scheduleTerminalFit]);
+
+  useEffect(() => {
+    const handleWindowResize = () => {
+      const nextMaxHeight = getTerminalMaxHeight();
+
+      setTerminalHeight((current) => Math.min(nextMaxHeight, Math.max(TERMINAL_MIN_HEIGHT, current)));
+      setTerminalDisplayHeight((current) => {
+        if (!isTerminalOpen) {
+          return 0;
+        }
+
+        return Math.min(nextMaxHeight, current);
+      });
+    };
+
+    window.addEventListener("resize", handleWindowResize);
+    return () => {
+      window.removeEventListener("resize", handleWindowResize);
+    };
   }, [isTerminalOpen]);
+
+  useEffect(() => {
+    if (!isTerminalResizing) {
+      return;
+    }
+
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+
+    document.body.style.cursor = "ns-resize";
+    document.body.style.userSelect = "none";
+
+    return () => {
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+    };
+  }, [isTerminalResizing]);
+
+  useEffect(() => {
+    return () => {
+      flushTerminalHeightFrame();
+
+      if (terminalFitFrameRef.current !== null) {
+        window.cancelAnimationFrame(terminalFitFrameRef.current);
+        terminalFitFrameRef.current = null;
+      }
+
+      terminalPendingHeightRef.current = null;
+      terminalResizeStateRef.current = null;
+    };
+  }, [flushTerminalHeightFrame]);
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -1863,7 +2122,7 @@ export default function ProjectWorkspacePage() {
                 size="sm"
                 type="button"
                 aria-label="Toggle terminal"
-                onClick={() => setIsTerminalOpen((value) => !value)}
+                onClick={toggleTerminal}
               >
                 <HiCommandLine className="size-4" />
                 Terminal
@@ -2151,31 +2410,63 @@ export default function ProjectWorkspacePage() {
               </div>
             </div>
 
-            {isTerminalOpen ? (
-              <div className="h-[38%] min-h-45 max-h-105 border-t border-border/70 bg-[#090a0a] p-3">
-                <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-wide text-muted-foreground">
-                  <div className="flex items-center gap-2">
-                    <HiCommandLine className="size-4" />
-                    <span>Terminal</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-muted-foreground/70">
-                      {activeRunId ? `Run ${activeRunId.slice(0, 8)}` : "Read only"}
-                    </span>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      type="button"
-                      aria-label="Close terminal"
-                      onClick={() => setIsTerminalOpen(false)}
-                    >
-                      <HiXMark className="size-4" />
-                    </Button>
-                  </div>
+            <div
+              style={{ height: `${terminalDisplayHeight}px` }}
+              className={cn(
+                "relative shrink-0 overflow-hidden bg-[#090a0a] transition-[height,opacity] duration-200 ease-out",
+                isTerminalOpen ? "border-t border-border/70 opacity-100" : "pointer-events-none border-t border-transparent opacity-0",
+              )}
+            >
+              {terminalDisplayHeight > 0 ? (
+                <div
+                  ref={terminalResizeHandleRef}
+                  role="separator"
+                  aria-label="Resize terminal"
+                  aria-orientation="horizontal"
+                  onPointerDown={handleTerminalResizeStart}
+                  onPointerMove={handleTerminalResizeMove}
+                  onPointerUp={handleTerminalResizeEnd}
+                  onPointerCancel={handleTerminalResizeCancel}
+                  onLostPointerCapture={handleTerminalResizeLostCapture}
+                  className="absolute inset-x-0 top-0 z-10 h-3 cursor-row-resize touch-none"
+                >
+                  <div
+                    className={cn(
+                      "mt-1 h-px w-full transition-colors",
+                      isTerminalResizing ? "bg-blue-400/80" : "bg-border/70 hover:bg-blue-400/60",
+                    )}
+                  />
                 </div>
-                <div ref={terminalContainerRef} className="h-[calc(100%-1.75rem)] w-full overflow-hidden" />
+              ) : null}
+              <div
+                className={cn(
+                  "flex h-full flex-col p-3 pt-4 transition-opacity duration-150",
+                  isTerminalOpen ? "opacity-100" : "opacity-0",
+                )}
+              >
+                  <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-wide text-muted-foreground">
+                    <div className="flex items-center gap-2">
+                      <HiCommandLine className="size-4" />
+                      <span>Terminal</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-muted-foreground/70">
+                        {activeRunId ? `Run ${activeRunId.slice(0, 8)}` : "Read only"}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        type="button"
+                        aria-label="Close terminal"
+                        onClick={closeTerminal}
+                      >
+                        <HiXMark className="size-4" />
+                      </Button>
+                    </div>
+                  </div>
+                  <div ref={terminalContainerRef} className="min-h-0 flex-1 w-full overflow-hidden" />
               </div>
-            ) : null}
+            </div>
           </div>
         </section>
       </div>
