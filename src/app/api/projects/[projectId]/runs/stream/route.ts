@@ -3,8 +3,6 @@ import { query } from "@/db";
 import { auth } from "@/lib/auth";
 import { generateProjectNameFromPrompt } from "@/lib/openrouter";
 import { serializeError } from "@/lib/better-stack";
-import { syncProjectFilesMetadata } from "@/lib/project-files";
-import { syncProjectWorkspaceToR2 } from "@/lib/r2";
 import { applyProjectEnvVarsToBox, ensureProjectPreview, getBoxById, isProjectPreviewHealthy, WORKDIR } from "@/lib/upstash-box";
 
 type RunMode = "build" | "plan";
@@ -62,6 +60,13 @@ const OPEN_CODE_PLATFORM_RULES = [
   "This platform only supports Vite React TypeScript projects.",
   "Keep changes inside this project only.",
   "Prefer editing existing React files instead of creating standalone HTML files.",
+  "Aim for production-quality UI by default: clean hierarchy, consistent spacing, strong typography, clear states, and polished responsive behavior.",
+  "Use consistent component primitives and shadcn/ui-style patterns for UI cohesion unless the existing project already follows a different system.",
+  "When working in a brand-new Vite project or a fresh scaffold without an established UI system, initialize shadcn/ui with the official CLI instead of only installing the package. For Vite, use the proper shadcn init flow such as `npx shadcn@latest init -t vite -d`, then add the components you need.",
+  "For brand-new Vite projects, set up a polished frontend foundation early: initialize shadcn/ui properly and ensure framer-motion, lucide-react, class-variance-authority, clsx, and tailwind-merge are available when needed.",
+  "Use icon packages for UI icons, preferably lucide-react, and do not use emojis as interface icons unless the user explicitly asks for emojis.",
+  "Build responsive layouts with flexbox and grid, and make sure the result works well on mobile and desktop by default.",
+  "Use framer-motion for meaningful UI motion and transitions when animation improves the experience; avoid gratuitous motion.",
   "Never create, modify, or commit `.env`, `.env.local`, `.env.*`, or other local secret files.",
   "When environment variables are needed, tell the user to add them in the Settings tab for this project instead of writing them to files.",
   "Assume project environment variables are injected by the platform after the user saves them in Settings.",
@@ -485,20 +490,6 @@ export const POST = withBetterStack(async (
                 }
               }
             }
-          }
-
-          const syncResult = await query<{ r2_prefix: string }>(
-            "select r2_prefix from projects where id = $1 limit 1",
-            [project.id],
-          );
-          const r2Prefix = syncResult.rows[0]?.r2_prefix;
-          if (r2Prefix) {
-            const sync = await syncProjectWorkspaceToR2({ box, r2Prefix });
-            await syncProjectFilesMetadata({
-              projectId: project.id,
-              files: sync.files,
-            });
-            push("files.synced", { fileCount: sync.fileCount });
           }
 
           await renameProjectPromise;
