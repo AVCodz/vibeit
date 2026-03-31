@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { BetterStackWebVitals } from "@logtail/next/webVitals";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -28,6 +29,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} flex min-h-screen flex-col font-sans antialiased`}
       >
+        <BetterStackWebVitals />
         {children}
       </body>
     </html>

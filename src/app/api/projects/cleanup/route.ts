@@ -1,4 +1,6 @@
+import { withBetterStack, type BetterStackRequest } from "@logtail/next";
 import { query } from "@/db";
+import { serializeError } from "@/lib/better-stack";
 import { syncProjectFilesMetadata } from "@/lib/project-files";
 import { syncProjectWorkspaceToR2 } from "@/lib/r2";
 import { getBoxById } from "@/lib/upstash-box";
@@ -11,11 +13,13 @@ type StaleSessionRow = {
   r2_prefix: string;
 };
 
-export async function POST(request: Request) {
+export const POST = withBetterStack(async (request: BetterStackRequest) => {
+  const log = request.log.with({ route: "projects.cleanup" });
   const expectedSecret = process.env.CRON_SECRET;
   const requestSecret = request.headers.get("x-cron-secret");
 
   if (!expectedSecret || !requestSecret) {
+    log.warn("Cleanup rejected because cron secret was missing");
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -23,6 +27,7 @@ export async function POST(request: Request) {
   const requestBuffer = Buffer.from(requestSecret);
 
   if (expectedBuffer.length !== requestBuffer.length || !timingSafeEqual(expectedBuffer, requestBuffer)) {
+    log.warn("Cleanup rejected because cron secret was invalid");
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -87,6 +92,12 @@ export async function POST(request: Request) {
         "update projects set status = $1, updated_at = $2 where id = $3",
         ["error", now, staleSession.project_id],
       ).catch(() => undefined);
+
+      log.error("Cleanup failed for stale project session", {
+        projectId: staleSession.project_id,
+        sessionId: staleSession.session_id,
+        ...serializeError(error),
+      });
     }
 
     results.push({
@@ -103,4 +114,4 @@ export async function POST(request: Request) {
     failed: results.filter((result) => Boolean(result.error)).length,
     results,
   });
-}
+});

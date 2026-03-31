@@ -1,5 +1,6 @@
 "use client";
 
+import { useLogger } from "@logtail/next/hooks";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { DottedSurface } from "@/components/ui/dotted-surface";
@@ -24,6 +25,7 @@ export default function Home() {
   const hasNavigatedRef = useRef(false);
   const router = useRouter();
   const { data: session } = useSession();
+  const log = useLogger({ source: "app/(main)/page.tsx" });
 
   const [promptIndex, setPromptIndex] = useState(0);
   const [displayedText, setDisplayedText] = useState("");
@@ -73,6 +75,7 @@ export default function Home() {
     }
 
     if (!session?.user) {
+      log.warn("Anonymous user redirected to auth from landing prompt");
       router.push("/auth");
       return;
     }
@@ -122,7 +125,10 @@ export default function Home() {
 
       router.push(`${url.pathname}?${url.searchParams.toString()}`);
     } catch (error) {
-      console.error(error);
+      log.error("Landing page bootstrap failed", {
+        promptLength: prompt.length,
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
     } finally {
       setIsBootstrapping(false);
     }
@@ -157,7 +163,10 @@ export default function Home() {
 
       setPromptValue(data.enhancedPrompt);
     } catch (error) {
-      console.error(error);
+      log.error("Landing page prompt enhancement failed", {
+        promptLength: prompt.length,
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
     } finally {
       setIsEnhancing(false);
     }
@@ -199,6 +208,7 @@ export default function Home() {
               if (!hasNavigatedRef.current && nextValue.trim().length > 0) {
                 if (!session?.user) {
                   hasNavigatedRef.current = true;
+                  log.warn("Anonymous user redirected to auth after typing on landing page");
                   router.push("/auth");
                 }
               }

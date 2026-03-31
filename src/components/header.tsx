@@ -1,5 +1,6 @@
 "use client";
 
+import { useLogger } from "@logtail/next/hooks";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -20,6 +21,7 @@ export function Header() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const { data: session, isPending } = useSession();
   const detailsRef = useRef<HTMLDetailsElement>(null);
+  const log = useLogger({ source: "components/header.tsx" });
 
   const closeDropdown = () => {
     if (detailsRef.current) detailsRef.current.open = false;
@@ -124,7 +126,15 @@ export function Header() {
                 <button
                   type="button"
                   className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-sm text-destructive transition-colors hover:bg-destructive/10"
-                  onClick={() => { closeDropdown(); signOut(); }}
+                  onClick={() => {
+                    closeDropdown();
+                    log.info("Auth flow initiated", {
+                      authAction: "sign_out",
+                      origin: "desktop_header",
+                      userId: session.user.id,
+                    });
+                    void signOut();
+                  }}
                 >
                   <HiArrowRightOnRectangle className="size-4" />
                   Sign out
@@ -227,7 +237,12 @@ export function Header() {
                     variant="ghost"
                     className="w-full justify-start"
                     onClick={() => {
-                      signOut();
+                      log.info("Auth flow initiated", {
+                        authAction: "sign_out",
+                        origin: "mobile_header",
+                        userId: session.user.id,
+                      });
+                      void signOut();
                       closeMobileMenu();
                     }}
                   >

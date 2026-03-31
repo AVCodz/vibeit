@@ -1,5 +1,7 @@
+import { withBetterStack, type BetterStackRequest } from "@logtail/next";
 import { query } from "@/db";
 import { auth } from "@/lib/auth";
+import { serializeError } from "@/lib/better-stack";
 import { generateProjectNameFromPrompt } from "@/lib/openrouter";
 import { restoreProjectWorkspaceFromR2 } from "@/lib/r2";
 import {
@@ -32,13 +34,15 @@ function sseEvent(event: string, data: unknown) {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
-export async function POST(
-  request: Request,
+export const POST = withBetterStack(async (
+  request: BetterStackRequest,
   context: { params: Promise<{ projectId: string }> },
-) {
+) => {
+  const log = request.log.with({ route: "projects.open.stream" });
   const session = await auth.api.getSession({ headers: request.headers });
 
   if (!session?.user) {
+    log.warn("Unauthorized streaming open attempt");
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -51,6 +55,7 @@ export async function POST(
 
   const project = projectResult.rows[0];
   if (!project) {
+    log.warn("Streaming open requested for missing project", { projectId, userId: session.user.id });
     return Response.json({ error: "Project not found" }, { status: 404 });
   }
 
@@ -176,6 +181,13 @@ export async function POST(
                 previewReachable: Boolean(previewUrl),
               });
 
+              log.info("Reused existing project session", {
+                projectId: project.id,
+                sessionId: latestSession.id,
+                userId: session.user.id,
+                previewReachable: Boolean(previewUrl),
+              });
+
               await renamePromise;
               controller.close();
               return;
@@ -270,10 +282,20 @@ export async function POST(
             ["active", new Date(), new Date(), project.id],
           );
 
+          const sessionId = sessionInsertResult.rows[0]?.id;
+
+          log.info("Bootstrapped new project session", {
+            projectId: project.id,
+            sessionId,
+            userId: session.user.id,
+            previewReachable,
+            hasPendingInitialRun,
+          });
+
           push("open.ready", {
             projectId: project.id,
             projectName: project.name,
-            sessionId: sessionInsertResult.rows[0]?.id,
+            sessionId,
             previewUrl,
             previewReachable,
           });
@@ -281,6 +303,12 @@ export async function POST(
           await renamePromise;
           controller.close();
         } catch (error) {
+          log.error("Streaming open failed", {
+            projectId: project.id,
+            userId: session.user.id,
+            ...serializeError(error),
+          });
+
           await query(
             "update project_messages set status = $1, updated_at = $2 where project_id = $3 and role = $4 and run_id is null and status in ($5, $6)",
             ["failed", new Date(), project.id, "assistant", "pending", "analyzing"],
@@ -305,4 +333,4 @@ export async function POST(
       Connection: "keep-alive",
     },
   });
-}
+});
