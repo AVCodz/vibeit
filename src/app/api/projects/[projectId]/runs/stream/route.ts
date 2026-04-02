@@ -1,14 +1,15 @@
+import { withBetterStack, type BetterStackRequest } from "@logtail/next";
 import { query } from "@/db";
 import { auth } from "@/lib/auth";
 import { generateProjectNameFromPrompt } from "@/lib/openrouter";
-import { syncProjectFilesMetadata } from "@/lib/project-files";
-import { syncProjectWorkspaceToR2 } from "@/lib/r2";
+import { serializeError } from "@/lib/better-stack";
 import { applyProjectEnvVarsToBox, ensureProjectPreview, getBoxById, isProjectPreviewHealthy, WORKDIR } from "@/lib/upstash-box";
 
 type RunMode = "build" | "plan";
 
 type RunStreamBody = {
   prompt?: string;
+  mentionedFilePaths?: unknown;
   userMessageId?: string;
   assistantMessageId?: string;
   mode?: RunMode;
@@ -25,22 +26,68 @@ function sseEvent(event: string, data: unknown) {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
+function normalizeMentionedFilePaths(input: unknown) {
+  if (!Array.isArray(input)) {
+    return [] as string[];
+  }
+
+  const seen = new Set<string>();
+  const paths: string[] = [];
+
+  for (const value of input) {
+    if (typeof value !== "string") {
+      continue;
+    }
+
+    const normalized = value.trim().replace(/^\/+/, "");
+    if (!normalized || normalized.includes("..") || normalized.startsWith(".env") || normalized.includes("/.env") || seen.has(normalized)) {
+      continue;
+    }
+
+    seen.add(normalized);
+    paths.push(normalized);
+
+    if (paths.length >= 12) {
+      break;
+    }
+  }
+
+  return paths;
+}
+
 const OPEN_CODE_PLATFORM_RULES = [
   "You are VibeIt's OpenCode agent inside a Vite React TypeScript project in the current directory.",
   "This platform only supports Vite React TypeScript projects.",
   "Keep changes inside this project only.",
   "Prefer editing existing React files instead of creating standalone HTML files.",
+  "Aim for production-quality UI by default: clean hierarchy, consistent spacing, strong typography, clear states, and polished responsive behavior.",
+  "Use consistent component primitives and shadcn/ui-style patterns for UI cohesion unless the existing project already follows a different system.",
+  "When working in a brand-new Vite project or a fresh scaffold without an established UI system, initialize shadcn/ui with the official CLI instead of only installing the package. For Vite, use the proper shadcn init flow such as `npx shadcn@latest init -t vite -d`, then add the components you need.",
+  "For brand-new Vite projects, set up a polished frontend foundation early: initialize shadcn/ui properly and ensure framer-motion, lucide-react, class-variance-authority, clsx, and tailwind-merge are available when needed.",
+  "Use icon packages for UI icons, preferably lucide-react, and do not use emojis as interface icons unless the user explicitly asks for emojis.",
+  "Build responsive layouts with flexbox and grid, and make sure the result works well on mobile and desktop by default.",
+  "Use framer-motion for meaningful UI motion and transitions when animation improves the experience; avoid gratuitous motion.",
   "Never create, modify, or commit `.env`, `.env.local`, `.env.*`, or other local secret files.",
   "When environment variables are needed, tell the user to add them in the Settings tab for this project instead of writing them to files.",
   "Assume project environment variables are injected by the platform after the user saves them in Settings.",
   "Never hardcode API keys, tokens, passwords, or other secrets in source files, examples, or fallback values.",
 ] as const;
 
-function buildOpenCodeRuntimePrompt(mode: RunMode, prompt: string) {
+function buildOpenCodeRuntimePrompt(mode: RunMode, prompt: string, mentionedFilePaths: string[]) {
+  const mentionInstructions = mentionedFilePaths.length > 0
+    ? [
+        "The user explicitly mentioned these workspace files:",
+        ...mentionedFilePaths.map((path) => `- ${path}`),
+        "Inspect the mentioned files directly with filesystem tools before making changes when they are relevant.",
+        "Treat the mentioned paths as high-priority hints, but do not assume their contents from the file names alone.",
+      ]
+    : [];
+
   const promptParts =
     mode === "plan"
       ? [
           ...OPEN_CODE_PLATFORM_RULES,
+          ...mentionInstructions,
           "You are in PLAN MODE.",
           "Do not modify files.",
           "Do not run shell commands that change project state.",
@@ -50,6 +97,7 @@ function buildOpenCodeRuntimePrompt(mode: RunMode, prompt: string) {
         ]
       : [
           ...OPEN_CODE_PLATFORM_RULES,
+          ...mentionInstructions,
           "Implement the requested changes directly in this project.",
           "If environment variables are required, explain which variables are needed and direct the user to the Settings tab.",
           prompt,
@@ -58,22 +106,26 @@ function buildOpenCodeRuntimePrompt(mode: RunMode, prompt: string) {
   return promptParts.join("\n\n");
 }
 
-export async function POST(
-  request: Request,
+export const POST = withBetterStack(async (
+  request: BetterStackRequest,
   context: { params: Promise<{ projectId: string }> },
-) {
+) => {
+  const log = request.log.with({ route: "projects.runs.stream" });
   const session = await auth.api.getSession({ headers: request.headers });
 
   if (!session?.user) {
+    log.warn("Unauthorized run attempt");
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { projectId } = await context.params;
   const body = (await request.json()) as RunStreamBody;
   const prompt = body.prompt?.trim();
+  const mentionedFilePaths = normalizeMentionedFilePaths(body.mentionedFilePaths);
   const mode = body.mode === "plan" ? "plan" : "build";
 
   if (!prompt) {
+    log.warn("Run rejected because prompt was missing", { projectId, userId: session.user.id });
     return Response.json({ error: "Prompt is required" }, { status: 400 });
   }
 
@@ -85,6 +137,7 @@ export async function POST(
   const project = projectResult.rows[0];
 
   if (!project) {
+    log.warn("Run requested for missing project", { projectId, userId: session.user.id });
     return Response.json({ error: "Project not found" }, { status: 404 });
   }
 
@@ -100,6 +153,7 @@ export async function POST(
   const activeProjectSession = activeSessionResult.rows[0];
 
   if (!activeProjectSession?.upstash_box_id) {
+    log.warn("Run requested without active box session", { projectId: project.id, userId: session.user.id });
     return Response.json({ error: "No active box session for project" }, { status: 409 });
   }
 
@@ -114,6 +168,14 @@ export async function POST(
 
   let userMessage: ProjectMessageRow | undefined;
   let assistantMessage: ProjectMessageRow | undefined;
+
+  log.info("Project run started", {
+    projectId: project.id,
+    sessionId: activeProjectSession.id,
+    runMode: mode,
+    mentionedFileCount: mentionedFilePaths.length,
+    userId: session.user.id,
+  });
 
   if (body.userMessageId) {
     const userMessageResult = await query<ProjectMessageRow>(
@@ -240,7 +302,7 @@ export async function POST(
           const box = await getBoxById(boxId);
           await box.cd(WORKDIR);
 
-          const runtimePrompt = buildOpenCodeRuntimePrompt(mode, prompt);
+          const runtimePrompt = buildOpenCodeRuntimePrompt(mode, prompt, mentionedFilePaths);
 
           const agentStream = await box.agent.stream({ prompt: runtimePrompt });
 
@@ -430,25 +492,28 @@ export async function POST(
             }
           }
 
-          const syncResult = await query<{ r2_prefix: string }>(
-            "select r2_prefix from projects where id = $1 limit 1",
-            [project.id],
-          );
-          const r2Prefix = syncResult.rows[0]?.r2_prefix;
-          if (r2Prefix) {
-            const sync = await syncProjectWorkspaceToR2({ box, r2Prefix });
-            await syncProjectFilesMetadata({
-              projectId: project.id,
-              files: sync.files,
-            });
-            push("files.synced", { fileCount: sync.fileCount });
-          }
-
           await renameProjectPromise;
+
+          log.info("Project run completed", {
+            projectId: project.id,
+            sessionId: activeProjectSession.id,
+            runId: run.id,
+            runMode: mode,
+            userId: session.user.id,
+          });
 
           push("run.completed", { runId: run.id });
           closeStream();
         } catch (error) {
+          log.error("Project run failed", {
+            projectId: project.id,
+            sessionId: activeProjectSession.id,
+            runId: run.id,
+            runMode: mode,
+            userId: session.user.id,
+            ...serializeError(error),
+          });
+
           await renameProjectPromise;
 
           await query(
@@ -493,4 +558,4 @@ export async function POST(
       "X-Accel-Buffering": "no",
     },
   });
-}
+});

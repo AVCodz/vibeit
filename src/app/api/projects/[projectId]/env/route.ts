@@ -1,5 +1,7 @@
+import { withBetterStack, type BetterStackRequest } from "@logtail/next";
 import { query } from "@/db";
 import { auth } from "@/lib/auth";
+import { serializeError } from "@/lib/better-stack";
 import { restoreProjectWorkspaceFromR2, syncProjectWorkspaceToR2 } from "@/lib/r2";
 import {
   listProjectEnvVars,
@@ -66,13 +68,15 @@ async function validateProjectOwnership(projectId: string, userId: string) {
   return projectResult.rows[0] ?? null;
 }
 
-export async function GET(
-  request: Request,
+export const GET = withBetterStack(async (
+  request: BetterStackRequest,
   context: { params: Promise<{ projectId: string }> },
-) {
+) => {
+  const log = request.log.with({ route: "projects.env.get" });
   const session = await auth.api.getSession({ headers: request.headers });
 
   if (!session?.user) {
+    log.warn("Unauthorized env read attempt");
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -80,20 +84,24 @@ export async function GET(
   const project = await validateProjectOwnership(projectId, session.user.id);
 
   if (!project) {
+    log.warn("Env read requested for missing project", { projectId, userId: session.user.id });
     return Response.json({ error: "Project not found" }, { status: 404 });
   }
 
   const envVars = await listProjectEnvVars(projectId);
+  log.info("Project env vars loaded", { projectId, userId: session.user.id, count: envVars.length });
   return Response.json({ envVars });
-}
+});
 
-export async function POST(
-  request: Request,
+export const POST = withBetterStack(async (
+  request: BetterStackRequest,
   context: { params: Promise<{ projectId: string }> },
-) {
+) => {
+  const log = request.log.with({ route: "projects.env.save" });
   const session = await auth.api.getSession({ headers: request.headers });
 
   if (!session?.user) {
+    log.warn("Unauthorized env save attempt");
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -101,6 +109,7 @@ export async function POST(
   const project = await validateProjectOwnership(projectId, session.user.id);
 
   if (!project) {
+    log.warn("Env save requested for missing project", { projectId, userId: session.user.id });
     return Response.json({ error: "Project not found" }, { status: 404 });
   }
 
@@ -111,6 +120,12 @@ export async function POST(
     requestedEnvVars = parseProjectEnvBody(body);
     normalizeProjectEnvEntries(requestedEnvVars);
   } catch (error) {
+    log.warn("Invalid env save payload", {
+      projectId,
+      userId: session.user.id,
+      ...serializeError(error),
+    });
+
     return Response.json(
       { error: error instanceof Error ? error.message : "Invalid environment variable payload" },
       { status: 400 },
@@ -166,6 +181,13 @@ export async function POST(
 
         await deleteBoxById(previousBoxId).catch(() => undefined);
       } catch (error) {
+        log.warn("Preview restart after env save failed", {
+          projectId,
+          sessionId: activeSession.id,
+          userId: session.user.id,
+          ...serializeError(error),
+        });
+
         restartError = error instanceof Error ? error.message : "Failed to rebuild preview box";
 
         await query(
@@ -175,6 +197,13 @@ export async function POST(
       }
     }
 
+    log.info("Project env vars saved", {
+      projectId,
+      userId: session.user.id,
+      count: envVars.length,
+      previewRestarted,
+    });
+
     return Response.json({
       envVars,
       previewRestarted,
@@ -182,9 +211,15 @@ export async function POST(
       restartError,
     });
   } catch (error) {
+    log.error("Saving project env vars failed", {
+      projectId,
+      userId: session.user.id,
+      ...serializeError(error),
+    });
+
     return Response.json(
       { error: error instanceof Error ? error.message : "Failed to save environment variables" },
       { status: 500 },
     );
   }
-}
+});

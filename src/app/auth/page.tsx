@@ -1,5 +1,6 @@
 "use client";
 
+import { useLogger } from "@logtail/next/hooks";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
@@ -30,6 +31,7 @@ const PROMPT_SUFFIXES = [
 export default function AuthPage() {
   const router = useRouter();
   const { data: session, isPending: isSessionPending } = useSession();
+  const log = useLogger({ source: "app/auth/page.tsx" });
 
   const [planActive, setPlanActive] = useState(false);
   const [promptIndex, setPromptIndex] = useState(0);
@@ -40,9 +42,12 @@ export default function AuthPage() {
 
   useEffect(() => {
     if (!isSessionPending && session?.user) {
+      log.info("Authenticated user visited auth page and was redirected", {
+        userId: session.user.id,
+      });
       router.replace("/");
     }
-  }, [isSessionPending, router, session]);
+  }, [isSessionPending, log, router, session]);
 
   useEffect(() => {
     const currentPrompt = PROMPT_SUFFIXES[promptIndex];
@@ -84,6 +89,12 @@ export default function AuthPage() {
     setErrorMessage("");
     setIsSubmitting(true);
 
+    log.info("Auth flow initiated", {
+      authProvider: "google",
+      authAction: "sign_in",
+      origin: "auth_page",
+    });
+
     try {
       const { error } = await signIn.social({
         provider: "google",
@@ -91,9 +102,29 @@ export default function AuthPage() {
       });
 
       if (error) {
+        log.warn("Auth flow returned an immediate error", {
+          authProvider: "google",
+          authAction: "sign_in",
+          origin: "auth_page",
+          errorMessage: error.message ?? "Unknown auth error",
+        });
         setErrorMessage(error.message ?? "Unable to continue with Google.");
         return;
       }
+
+      log.info("Auth flow handed off to Better Auth", {
+        authProvider: "google",
+        authAction: "sign_in",
+        origin: "auth_page",
+      });
+    } catch (error) {
+      log.error("Auth flow failed on the client", {
+        authProvider: "google",
+        authAction: "sign_in",
+        origin: "auth_page",
+        errorMessage: error instanceof Error ? error.message : "Unknown error",
+      });
+      setErrorMessage("Unable to continue with Google.");
     } finally {
       setIsSubmitting(false);
     }

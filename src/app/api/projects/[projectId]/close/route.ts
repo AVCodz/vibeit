@@ -1,3 +1,4 @@
+import { withBetterStack, type BetterStackRequest } from "@logtail/next";
 import { query } from "@/db";
 import { auth } from "@/lib/auth";
 import { syncProjectFilesMetadata } from "@/lib/project-files";
@@ -17,13 +18,15 @@ type SessionRow = {
   session_status: string;
 };
 
-export async function POST(
-  request: Request,
+export const POST = withBetterStack(async (
+  request: BetterStackRequest,
   context: { params: Promise<{ projectId: string }> },
-) {
+) => {
+  const log = request.log.with({ route: "projects.close" });
   const session = await auth.api.getSession({ headers: request.headers });
 
   if (!session?.user) {
+    log.warn("Unauthorized close attempt");
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -36,6 +39,7 @@ export async function POST(
 
   const project = projectResult.rows[0];
   if (!project) {
+    log.warn("Project close requested for missing project", { projectId, userId: session.user.id });
     return Response.json({ error: "Project not found" }, { status: 404 });
   }
 
@@ -46,6 +50,7 @@ export async function POST(
 
   const activeSession = activeSessionResult.rows[0];
   if (!activeSession?.upstash_box_id) {
+    log.info("Project closed without active box", { projectId: project.id, userId: session.user.id });
     await query("update projects set status = $1, updated_at = $2 where id = $3", [
       "inactive",
       new Date(),
@@ -121,4 +126,4 @@ export async function POST(
     const message = error instanceof Error ? error.message : "Failed to close project";
     return Response.json({ error: message }, { status: 500 });
   }
-}
+});

@@ -1,5 +1,7 @@
+import { withBetterStack, type BetterStackRequest } from "@logtail/next";
 import { query } from "@/db";
 import { auth } from "@/lib/auth";
+import { serializeError } from "@/lib/better-stack";
 import { restoreProjectWorkspaceFromR2 } from "@/lib/r2";
 import { bootstrapProjectBox, deleteBoxById } from "@/lib/upstash-box";
 
@@ -16,13 +18,15 @@ type SessionRow = {
   session_status: string;
 };
 
-export async function POST(
-  request: Request,
+export const POST = withBetterStack(async (
+  request: BetterStackRequest,
   context: { params: Promise<{ projectId: string }> },
-) {
+) => {
+  const log = request.log.with({ route: "projects.open" });
   const session = await auth.api.getSession({ headers: request.headers });
 
   if (!session?.user) {
+    log.warn("Unauthorized project open attempt");
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -35,6 +39,7 @@ export async function POST(
 
   const project = projectResult.rows[0];
   if (!project) {
+    log.warn("Project open requested for missing project", { projectId, userId: session.user.id });
     return Response.json({ error: "Project not found" }, { status: 404 });
   }
 
@@ -85,15 +90,30 @@ export async function POST(
       ["active", new Date(), new Date(), project.id],
     );
 
+    const sessionId = sessionInsertResult.rows[0]?.id;
+
+    log.info("Project opened", {
+      projectId: project.id,
+      sessionId,
+      userId: session.user.id,
+      previewReachable: box.previewReachable,
+    });
+
     return Response.json({
       projectId: project.id,
       projectName: project.name,
-      sessionId: sessionInsertResult.rows[0]?.id,
+      sessionId,
       previewUrl: box.previewUrl,
       previewReachable: box.previewReachable,
     });
   } catch (error) {
+    log.error("Project open failed", {
+      projectId: project.id,
+      userId: session.user.id,
+      ...serializeError(error),
+    });
+
     const message = error instanceof Error ? error.message : "Failed to open project";
     return Response.json({ error: message }, { status: 500 });
   }
-}
+});

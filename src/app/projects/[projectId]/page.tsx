@@ -1,6 +1,7 @@
 "use client";
 
 import Editor from "@monaco-editor/react";
+import { useLogger } from "@logtail/next/hooks";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
@@ -76,6 +77,12 @@ type ProjectEnvVar = {
   id: string;
   key: string;
   value: string;
+};
+
+type ActiveMention = {
+  start: number;
+  end: number;
+  query: string;
 };
 
 const PROJECT_UI_CACHE_VERSION = 1;
@@ -161,6 +168,101 @@ function parseToolActivity(toolName: string, input: unknown): string {
   }
 
   return `Tool: ${toolName}`;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function findActiveMention(value: string, caretIndex: number): ActiveMention | null {
+  const caret = Math.max(0, Math.min(caretIndex, value.length));
+  const beforeCaret = value.slice(0, caret);
+  const match = beforeCaret.match(/(^|\s)@([^\s@]*)$/);
+
+  if (!match || match.index === undefined) {
+    return null;
+  }
+
+  const prefixLength = match[1]?.length ?? 0;
+  const mentionStart = match.index + prefixLength;
+
+  return {
+    start: mentionStart,
+    end: caret,
+    query: match[2] ?? "",
+  };
+}
+
+function scoreFileMention(path: string, query: string) {
+  if (!query) {
+    const depth = path.split("/").length - 1;
+
+    if (path.startsWith("src/")) {
+      return 1000 - depth;
+    }
+
+    if (depth > 0) {
+      return 800 - depth;
+    }
+
+    return 100;
+  }
+
+  const haystack = path.toLowerCase();
+  const needle = query.toLowerCase();
+
+  if (haystack === needle) {
+    return 1000;
+  }
+
+  if (haystack.startsWith(needle)) {
+    return 800 - haystack.length;
+  }
+
+  const fileName = haystack.split("/").pop() ?? haystack;
+  if (fileName.startsWith(needle)) {
+    return 700 - haystack.length;
+  }
+
+  if (haystack.includes(needle)) {
+    return 600 - haystack.indexOf(needle) - haystack.length * 0.01;
+  }
+
+  let score = 0;
+  let needleIndex = 0;
+
+  for (let index = 0; index < haystack.length && needleIndex < needle.length; index += 1) {
+    if (haystack[index] === needle[needleIndex]) {
+      score += haystack[index - 1] === "/" ? 6 : 3;
+      needleIndex += 1;
+    }
+  }
+
+  return needleIndex === needle.length ? score - haystack.length * 0.01 : Number.NEGATIVE_INFINITY;
+}
+
+function extractMentionedFilePaths(value: string, allowedPaths: Set<string>) {
+  const matches = value.match(/(^|\s)@([^\s@]+)/g) ?? [];
+  const seen = new Set<string>();
+  const mentionedPaths: string[] = [];
+
+  for (const rawMatch of matches) {
+    const normalized = rawMatch.trim().replace(/^@/, "");
+    if (!allowedPaths.has(normalized) || seen.has(normalized)) {
+      continue;
+    }
+
+    seen.add(normalized);
+    mentionedPaths.push(normalized);
+  }
+
+  return mentionedPaths;
+}
+
+function removeMentionFromPrompt(value: string, path: string) {
+  const escaped = escapeRegExp(path);
+  const withoutMention = value.replace(new RegExp(`(^|\\s)@${escaped}(?=\\s|$)`, "g"), (match, leadingWhitespace: string) => leadingWhitespace || "");
+  return withoutMention.replace(/[ \t]{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function deriveToolPhase(toolName: string, input: unknown): AgentPhase {
@@ -470,8 +572,12 @@ export default function ProjectWorkspacePage() {
   const [isEnvVarsLoading, setIsEnvVarsLoading] = useState(true);
   const [isSavingEnvVars, setIsSavingEnvVars] = useState(false);
   const [showEnvValues, setShowEnvValues] = useState(false);
+  const [chatCursorIndex, setChatCursorIndex] = useState(0);
+  const [activeMentionIndex, setActiveMentionIndex] = useState(0);
 
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
+  const mentionSuggestionsRef = useRef<HTMLDivElement>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const terminalResizeHandleRef = useRef<HTMLDivElement>(null);
   const terminalContainerRef = useRef<HTMLDivElement>(null);
@@ -489,9 +595,58 @@ export default function ProjectWorkspacePage() {
   } | null>(null);
   const initialPromptRan = useRef(false);
   const router = useRouter();
+  const log = useLogger({ source: "app/projects/[projectId]/page.tsx" });
 
   const selectedFile = useMemo(() => files.find((file) => file.path === selectedFilePath), [files, selectedFilePath]);
   const fileTree = useMemo(() => buildFileTree(files), [files]);
+  const availableMentionPaths = useMemo(
+    () => files.filter((file) => !file.isDir).map((file) => file.path),
+    [files],
+  );
+  const availableMentionPathSet = useMemo(() => new Set(availableMentionPaths), [availableMentionPaths]);
+  const mentionedFilePaths = useMemo(
+    () => extractMentionedFilePaths(chatInput, availableMentionPathSet),
+    [availableMentionPathSet, chatInput],
+  );
+  const activeMention = useMemo(
+    () => findActiveMention(chatInput, chatCursorIndex),
+    [chatCursorIndex, chatInput],
+  );
+  const mentionSuggestions = useMemo(() => {
+    if (!activeMention) {
+      return [];
+    }
+
+    const scored = availableMentionPaths
+      .filter((path) => !mentionedFilePaths.includes(path))
+      .map((path) => ({ path, score: scoreFileMention(path, activeMention.query) }))
+      .filter((entry) => Number.isFinite(entry.score))
+      .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path));
+
+    if (!activeMention.query) {
+      const rootFiles = scored.filter((entry) => !entry.path.includes("/"));
+      const nestedFiles = scored.filter((entry) => entry.path.includes("/"));
+      const mixed: Array<{ path: string; score: number }> = [];
+
+      for (let index = 0; mixed.length < 8 && (index < nestedFiles.length || index < rootFiles.length); index += 1) {
+        if (index < nestedFiles.length) {
+          mixed.push(nestedFiles[index]!);
+        }
+
+        if (mixed.length >= 8) {
+          break;
+        }
+
+        if (index < rootFiles.length) {
+          mixed.push(rootFiles[index]!);
+        }
+      }
+
+      return mixed;
+    }
+
+    return scored.slice(0, 8);
+  }, [activeMention, availableMentionPaths, mentionedFilePaths]);
   const configuredEnvVarCount = useMemo(
     () => envVars.filter((entry) => entry.key.trim().length > 0).length,
     [envVars],
@@ -503,6 +658,59 @@ export default function ProjectWorkspacePage() {
       [path]: !current[path],
     }));
   }, []);
+
+  useEffect(() => {
+    setActiveMentionIndex(0);
+  }, [activeMention?.query]);
+
+  useEffect(() => {
+    if (mentionSuggestions.length === 0) {
+      return;
+    }
+
+    const activeItem = mentionSuggestionsRef.current?.querySelector<HTMLElement>(
+      `[data-mention-index="${activeMentionIndex}"]`,
+    );
+
+    activeItem?.scrollIntoView({ block: "nearest" });
+  }, [activeMentionIndex, mentionSuggestions]);
+
+  const handleChatInputChange = useCallback((value: string, selectionStart: number | null) => {
+    setChatInput(value);
+    setChatCursorIndex(selectionStart ?? value.length);
+  }, []);
+
+  const applyMentionSuggestion = useCallback((path: string) => {
+    const textarea = chatInputRef.current;
+    const mention = findActiveMention(chatInput, textarea?.selectionStart ?? chatCursorIndex);
+
+    if (!mention) {
+      return;
+    }
+
+    const nextValue = `${chatInput.slice(0, mention.start)}@${path} ${chatInput.slice(mention.end)}`;
+    const nextCursorIndex = mention.start + path.length + 2;
+
+    setChatInput(nextValue);
+    setChatCursorIndex(nextCursorIndex);
+    setActiveMentionIndex(0);
+
+    window.requestAnimationFrame(() => {
+      textarea?.focus();
+      textarea?.setSelectionRange(nextCursorIndex, nextCursorIndex);
+    });
+  }, [chatCursorIndex, chatInput]);
+
+  const removeMentionedFile = useCallback((path: string) => {
+    const nextValue = removeMentionFromPrompt(chatInput, path);
+    setChatInput(nextValue);
+    setChatCursorIndex(nextValue.length);
+
+    window.requestAnimationFrame(() => {
+      chatInputRef.current?.focus();
+      chatInputRef.current?.setSelectionRange(nextValue.length, nextValue.length);
+    });
+  }, [chatInput]);
 
   const flushTerminalHeightFrame = useCallback(() => {
     if (terminalHeightFrameRef.current !== null) {
@@ -1077,6 +1285,7 @@ export default function ProjectWorkspacePage() {
     },
   ) => {
     const trimmedPrompt = prompt.trim();
+    const resolvedMentionedFilePaths = extractMentionedFilePaths(trimmedPrompt, availableMentionPathSet);
 
     if (!projectId || !trimmedPrompt) {
       return;
@@ -1090,6 +1299,7 @@ export default function ProjectWorkspacePage() {
 
     setQueuedPrompt("");
     setChatInput("");
+    setChatCursorIndex(0);
 
     setIsRunning(true);
     setActivity("Analyzing...");
@@ -1132,6 +1342,7 @@ export default function ProjectWorkspacePage() {
         },
         body: JSON.stringify({
           prompt: trimmedPrompt,
+          mentionedFilePaths: resolvedMentionedFilePaths,
           userMessageId: existingMessageIds?.userId,
           assistantMessageId: existingMessageIds?.assistantId,
           mode: runMode,
@@ -1359,7 +1570,7 @@ export default function ProjectWorkspacePage() {
       setInitialMessageIds(null);
       setActiveRunId(null);
     }
-  }, [appendAssistantText, applyProjectName, isWorkspaceReady, loadFiles, loadMessages, previewUrl, projectId, pushTerminalLog, resetTerminalLogs, runMode, setPreviewUrlWithRoute, upsertFileFromToolInput]);
+  }, [appendAssistantText, applyProjectName, availableMentionPathSet, isWorkspaceReady, loadFiles, loadMessages, previewUrl, projectId, pushTerminalLog, resetTerminalLogs, runMode, setPreviewUrlWithRoute, upsertFileFromToolInput]);
 
   const handleEnhancePrompt = async () => {
     const prompt = chatInput.trim();
@@ -1412,6 +1623,10 @@ export default function ProjectWorkspacePage() {
 
       router.push("/");
     } catch (error) {
+      log.error("Manual project close failed", {
+        projectId,
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
       setActivity(error instanceof Error ? error.message : "Unable to close project");
       setIsClosing(false);
     }
@@ -2059,12 +2274,95 @@ export default function ProjectWorkspacePage() {
             >
               <HiSparkles className="size-4" />
             </Button>
+            {mentionedFilePaths.length > 0 ? (
+              <div className="flex flex-wrap gap-2 pr-12">
+                {mentionedFilePaths.map((path) => (
+                  <button
+                    key={path}
+                    type="button"
+                    onClick={() => removeMentionedFile(path)}
+                    className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-secondary px-2.5 py-1 text-xs text-foreground transition-colors hover:bg-secondary/80"
+                    aria-label={`Remove @${path} mention`}
+                  >
+                    <span className="font-medium text-muted-foreground">@</span>
+                    <span className="max-w-52 truncate">{path}</span>
+                    <HiXMark className="size-3.5 text-muted-foreground" />
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <textarea
+              ref={chatInputRef}
               value={chatInput}
-              onChange={(event) => setChatInput(event.target.value)}
+              onChange={(event) => handleChatInputChange(event.target.value, event.target.selectionStart)}
+              onClick={(event) => setChatCursorIndex(event.currentTarget.selectionStart ?? chatInput.length)}
+              onKeyUp={(event) => setChatCursorIndex(event.currentTarget.selectionStart ?? chatInput.length)}
+              onKeyDown={(event) => {
+                if (mentionSuggestions.length > 0) {
+                  if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    setActiveMentionIndex((current) => (current + 1) % mentionSuggestions.length);
+                    return;
+                  }
+
+                  if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setActiveMentionIndex((current) => (current - 1 + mentionSuggestions.length) % mentionSuggestions.length);
+                    return;
+                  }
+
+                  if (event.key === "Enter" || event.key === "Tab") {
+                    event.preventDefault();
+                    applyMentionSuggestion(mentionSuggestions[activeMentionIndex]?.path ?? mentionSuggestions[0]!.path);
+                    return;
+                  }
+
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    const nextCursorIndex = activeMention?.start ?? chatInput.length;
+                    setChatCursorIndex(nextCursorIndex);
+                    window.requestAnimationFrame(() => {
+                      chatInputRef.current?.setSelectionRange(nextCursorIndex, nextCursorIndex);
+                    });
+                    return;
+                  }
+                }
+
+                if (event.key === "Backspace" && !chatInput && mentionedFilePaths.length > 0) {
+                  event.preventDefault();
+                  removeMentionedFile(mentionedFilePaths[mentionedFilePaths.length - 1]!);
+                }
+              }}
               placeholder="Describe what you want to build..."
               className="min-h-28 w-full resize-none bg-transparent pr-12 text-sm outline-none placeholder:text-muted-foreground"
             />
+            {mentionSuggestions.length > 0 ? (
+              <div className="absolute left-3 right-3 bottom-full z-20 mb-2 overflow-hidden rounded-xl border border-border/70 bg-card shadow-xl">
+                <div className="border-b border-border/60 px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+                  Mention Files
+                </div>
+                <div ref={mentionSuggestionsRef} className="max-h-56 overflow-y-auto py-1">
+                  {mentionSuggestions.map((suggestion, index) => (
+                    <button
+                      key={suggestion.path}
+                      data-mention-index={index}
+                      type="button"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        applyMentionSuggestion(suggestion.path);
+                      }}
+                      className={cn(
+                        "flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors",
+                        index === activeMentionIndex ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+                      )}
+                    >
+                      <span className="truncate font-mono text-xs">{suggestion.path}</span>
+                      <span className="shrink-0 text-[11px] uppercase tracking-[0.18em] text-muted-foreground">file</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             <div className="flex items-center justify-between gap-2">
               <Button
                 type="button"

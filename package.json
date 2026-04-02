@@ -17,6 +17,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1014.0",
     "@gsap/react": "^2.1.2",
+    "@logtail/next": "^0.3.1",
     "@monaco-editor/react": "^4.7.0",
     "@neondatabase/serverless": "^1.0.2",
     "@openrouter/sdk": "^0.9.11",

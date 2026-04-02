@@ -1,5 +1,7 @@
+import { withBetterStack, type BetterStackRequest } from "@logtail/next";
 import { query } from "@/db";
 import { auth } from "@/lib/auth";
+import { getRequestContext, serializeError } from "@/lib/better-stack";
 import { getBoxById, WORKDIR } from "@/lib/upstash-box";
 
 type ProjectRow = {
@@ -71,43 +73,82 @@ async function listRecursive(
   return result;
 }
 
-export async function GET(
-  request: Request,
+export const GET = withBetterStack(async (
+  request: BetterStackRequest,
   context: { params: Promise<{ projectId: string }> },
-) {
+) => {
+  const startedAt = Date.now();
+  const requestContext = getRequestContext(request);
+  const log = request.log.with({ route: "projects.files", ...requestContext });
   const session = await auth.api.getSession({ headers: request.headers });
 
   if (!session?.user) {
+    log.warn("Project files request rejected", {
+      outcome: "failure",
+      statusCode: 401,
+      durationMs: Date.now() - startedAt,
+    });
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { projectId } = await context.params;
 
-  const projectResult = await query<ProjectRow>(
-    "select id from projects where id = $1 and user_id = $2 limit 1",
-    [projectId, session.user.id],
-  );
-  if (!projectResult.rows[0]) {
-    return Response.json({ error: "Project not found" }, { status: 404 });
-  }
-
-  const sessionResult = await query<SessionRow>(
-    "select upstash_box_id from project_sessions where project_id = $1 order by created_at desc limit 1",
-    [projectId],
-  );
-  const boxId = sessionResult.rows[0]?.upstash_box_id;
-  if (!boxId) {
-    return Response.json({ error: "No active box" }, { status: 409 });
-  }
-
   try {
+    const projectResult = await query<ProjectRow>(
+      "select id from projects where id = $1 and user_id = $2 limit 1",
+      [projectId, session.user.id],
+    );
+    if (!projectResult.rows[0]) {
+      log.warn("Project files request failed because project was missing", {
+        outcome: "failure",
+        statusCode: 404,
+        durationMs: Date.now() - startedAt,
+        userId: session.user.id,
+        projectId,
+      });
+      return Response.json({ error: "Project not found" }, { status: 404 });
+    }
+
+    const sessionResult = await query<SessionRow>(
+      "select upstash_box_id from project_sessions where project_id = $1 order by created_at desc limit 1",
+      [projectId],
+    );
+    const boxId = sessionResult.rows[0]?.upstash_box_id;
+    if (!boxId) {
+      log.warn("Project files request failed because no active box was available", {
+        outcome: "failure",
+        statusCode: 409,
+        durationMs: Date.now() - startedAt,
+        userId: session.user.id,
+        projectId,
+      });
+      return Response.json({ error: "No active box" }, { status: 409 });
+    }
+
     const box = await getBoxById(boxId);
     await box.cd(WORKDIR);
     const entries = await listRecursive(box);
 
+    log.info("Project files request completed", {
+      outcome: "success",
+      statusCode: 200,
+      durationMs: Date.now() - startedAt,
+      userId: session.user.id,
+      projectId,
+      entryCount: entries.length,
+    });
+
     return Response.json({ entries });
   } catch (error) {
+    log.error("Project files request failed", {
+      outcome: "error",
+      statusCode: 500,
+      durationMs: Date.now() - startedAt,
+      userId: session.user.id,
+      projectId,
+      ...serializeError(error),
+    });
     const message = error instanceof Error ? error.message : "Failed to list files";
     return Response.json({ error: message }, { status: 500 });
   }
-}
+});
