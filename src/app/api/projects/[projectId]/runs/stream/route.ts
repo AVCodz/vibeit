@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { generateProjectNameFromPrompt } from "@/lib/openrouter";
 import { serializeError } from "@/lib/better-stack";
 import { applyProjectEnvVarsToBox, ensureProjectPreview, getBoxById, isProjectPreviewHealthy, WORKDIR } from "@/lib/upstash-box";
+import { registerActiveRun, removeActiveRun } from "@/lib/active-runs";
 
 type RunMode = "build" | "plan";
 
@@ -306,6 +307,14 @@ export const POST = withBetterStack(async (
 
           const agentStream = await box.agent.stream({ prompt: runtimePrompt });
 
+          const runAbortController = new AbortController();
+          registerActiveRun(run.id, {
+            cancel: () => agentStream.cancel(),
+            abortController: runAbortController,
+            projectId: project.id,
+            createdAt: Date.now(),
+          });
+
           let dbFlushTimer: ReturnType<typeof setTimeout> | null = null;
           let dbFlushNeeded = false;
 
@@ -384,6 +393,8 @@ export const POST = withBetterStack(async (
               );
             }
           }
+
+          removeActiveRun(run.id);
 
           if (dbFlushTimer) clearTimeout(dbFlushTimer);
           await Promise.all([
@@ -505,26 +516,46 @@ export const POST = withBetterStack(async (
           push("run.completed", { runId: run.id });
           closeStream();
         } catch (error) {
-          log.error("Project run failed", {
-            projectId: project.id,
-            sessionId: activeProjectSession.id,
-            runId: run.id,
-            runMode: mode,
-            userId: session.user.id,
-            ...serializeError(error),
-          });
+          removeActiveRun(run.id);
+
+          const isCancelled =
+            error instanceof Error &&
+            (error.name === "AbortError" || error.message.includes("cancel"));
+
+          if (isCancelled) {
+            log.info("Project run cancelled", {
+              projectId: project.id,
+              sessionId: activeProjectSession.id,
+              runId: run.id,
+              userId: session.user.id,
+            });
+          } else {
+            log.error("Project run failed", {
+              projectId: project.id,
+              sessionId: activeProjectSession.id,
+              runId: run.id,
+              runMode: mode,
+              userId: session.user.id,
+              ...serializeError(error),
+            });
+          }
 
           await renameProjectPromise;
+
+          const finalStatus = isCancelled ? "completed" : "failed";
+          const finalRunStatus = isCancelled ? "cancelled" : "failed";
 
           await query(
             "update project_messages set content = $1, status = $2, updated_at = $3 where id = $4",
             [
               assistantContent.length > 0
                 ? assistantContent
-                : error instanceof Error
-                  ? error.message
-                  : "Unknown run failure",
-              "failed",
+                : isCancelled
+                  ? "Generation was stopped."
+                  : error instanceof Error
+                    ? error.message
+                    : "Unknown run failure",
+              finalStatus,
               new Date(),
               assistantMessage.id,
             ],
@@ -533,17 +564,29 @@ export const POST = withBetterStack(async (
           await query(
             "update agent_runs set status = $1, completed_at = $2, error_message = $3 where id = $4",
             [
-              "failed",
+              finalRunStatus,
               new Date(),
-              error instanceof Error ? error.message : "Unknown run failure",
+              isCancelled
+                ? "Cancelled by user"
+                : error instanceof Error
+                  ? error.message
+                  : "Unknown run failure",
               run.id,
             ],
           );
 
-          push("run.failed", {
-            runId: run.id,
-            error: error instanceof Error ? error.message : "Unknown run failure",
-          });
+          if (isCancelled) {
+            push("run.cancelled", {
+              runId: run.id,
+              output: assistantContent,
+              assistantMessageId: assistantMessage.id,
+            });
+          } else {
+            push("run.failed", {
+              runId: run.id,
+              error: error instanceof Error ? error.message : "Unknown run failure",
+            });
+          }
           closeStream();
         }
       })();

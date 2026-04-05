@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { AgentStatusLoader } from "@/components/ui/agent-status-loader";
 import type { AgentPhase } from "@/components/ui/agent-status-loader";
 import { Input } from "@/components/ui/input";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
@@ -27,6 +28,7 @@ import {
   HiOutlineArrowTopRightOnSquare,
   HiPlus,
   HiSparkles,
+  HiStop,
   HiTrash,
   HiXMark,
 } from "react-icons/hi2";
@@ -568,6 +570,8 @@ export default function ProjectWorkspacePage() {
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({
     src: true,
   });
+  const fileReloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const runAbortControllerRef = useRef<AbortController | null>(null);
   const [envVars, setEnvVars] = useState<ProjectEnvVar[]>([createProjectEnvVar()]);
   const [isEnvVarsLoading, setIsEnvVarsLoading] = useState(true);
   const [isSavingEnvVars, setIsSavingEnvVars] = useState(false);
@@ -1033,6 +1037,9 @@ export default function ProjectWorkspacePage() {
     });
   }, [messages, projectId, projectName, runMode]);
 
+  const selectedFilePathRef = useRef(selectedFilePath);
+  selectedFilePathRef.current = selectedFilePath;
+
   const loadFiles = useCallback(async () => {
     if (!projectId) {
       return;
@@ -1066,14 +1073,14 @@ export default function ProjectWorkspacePage() {
 
     setFiles(mapped);
 
-    const currentSelected = mapped.find((file) => !file.isDir && file.path === selectedFilePath);
-    if (!currentSelected) {
+    const currentPath = selectedFilePathRef.current;
+    if (!currentPath || !mapped.some((file) => !file.isDir && file.path === currentPath)) {
       const firstFile = mapped.find((file) => !file.isDir);
       if (firstFile) {
         setSelectedFilePath(firstFile.path);
       }
     }
-  }, [projectId, selectedFilePath]);
+  }, [projectId]);
 
   const loadFileContent = useCallback(
     async (path: string) => {
@@ -1335,6 +1342,9 @@ export default function ProjectWorkspacePage() {
     try {
       let shouldForcePreviewReload = false;
 
+      const abortController = new AbortController();
+      runAbortControllerRef.current = abortController;
+
       const response = await fetch(`/api/projects/${projectId}/runs/stream`, {
         method: "POST",
         headers: {
@@ -1347,6 +1357,7 @@ export default function ProjectWorkspacePage() {
           assistantMessageId: existingMessageIds?.assistantId,
           mode: runMode,
         }),
+        signal: abortController.signal,
       });
 
       if (!response.ok || !response.body) {
@@ -1491,6 +1502,15 @@ export default function ProjectWorkspacePage() {
               }
             }
             upsertFileFromToolInput(payload.input);
+
+            // Debounce file tree reload on tool events (don't block stream)
+            if (fileReloadTimerRef.current) {
+              clearTimeout(fileReloadTimerRef.current);
+            }
+            fileReloadTimerRef.current = setTimeout(() => {
+              void loadFiles().catch(() => undefined);
+            }, 800);
+
             continue;
           }
 
@@ -1527,6 +1547,27 @@ export default function ProjectWorkspacePage() {
               continue;
             }
 
+          if (eventName === "run.cancelled") {
+            setMessages((current) =>
+              current.map((message) =>
+                message.id === assistantMessageId
+                  ? {
+                      ...message,
+                      content: typeof payload.output === "string" && payload.output.length > 0
+                        ? payload.output
+                        : message.content || "Generation was stopped.",
+                      status: "completed",
+                    }
+                  : message,
+              ),
+            );
+            setAgentDetail("");
+            setAgentPhase("idle");
+            setActivity("Run stopped");
+            pushTerminalLog("[info] Run cancelled by user");
+            continue;
+          }
+
           if (eventName === "run.failed") {
             setMessages((current) =>
               current.map((message) =>
@@ -1546,31 +1587,72 @@ export default function ProjectWorkspacePage() {
             }
           }
         }
-
-        await loadFiles();
       }
 
+      // Reload files once after streaming completes
+      if (fileReloadTimerRef.current) {
+        clearTimeout(fileReloadTimerRef.current);
+        fileReloadTimerRef.current = null;
+      }
+      await loadFiles();
       await loadMessages({ silent: true });
     } catch (error) {
-      setMessages((current) =>
-        current.map((message) =>
-          message.id === assistantMessageId || message.id === tempAssistantMessageId
-            ? {
-                ...message,
-                status: "failed",
-              }
-            : message,
-        ),
-      );
-      setAgentDetail("");
-      setActivity(error instanceof Error ? error.message : "Run failed");
-      pushTerminalLog(error instanceof Error ? `[error] ${error.message}` : "[error] Run failed");
+      const isCancelled = error instanceof DOMException && error.name === "AbortError";
+
+      if (isCancelled) {
+        setMessages((current) =>
+          current.map((message) =>
+            message.id === assistantMessageId || message.id === tempAssistantMessageId
+              ? {
+                  ...message,
+                  status: "completed",
+                }
+              : message,
+          ),
+        );
+        setAgentDetail("");
+        setAgentPhase("idle");
+        setActivity("Run stopped");
+      } else {
+        setMessages((current) =>
+          current.map((message) =>
+            message.id === assistantMessageId || message.id === tempAssistantMessageId
+              ? {
+                  ...message,
+                  status: "failed",
+                }
+              : message,
+          ),
+        );
+        setAgentDetail("");
+        setActivity(error instanceof Error ? error.message : "Run failed");
+        pushTerminalLog(error instanceof Error ? `[error] ${error.message}` : "[error] Run failed");
+      }
     } finally {
+      runAbortControllerRef.current = null;
+      if (fileReloadTimerRef.current) {
+        clearTimeout(fileReloadTimerRef.current);
+        fileReloadTimerRef.current = null;
+      }
       setIsRunning(false);
       setInitialMessageIds(null);
       setActiveRunId(null);
     }
   }, [appendAssistantText, applyProjectName, availableMentionPathSet, isWorkspaceReady, loadFiles, loadMessages, previewUrl, projectId, pushTerminalLog, resetTerminalLogs, runMode, setPreviewUrlWithRoute, upsertFileFromToolInput]);
+
+  const cancelRun = useCallback(async () => {
+    // Abort the client-side SSE reader
+    runAbortControllerRef.current?.abort();
+
+    // Tell the server to cancel the Upstash Box agent run
+    try {
+      await fetch(`/api/projects/${projectId}/runs/cancel`, {
+        method: "POST",
+      });
+    } catch {
+      // Best effort — the abort above already stops client-side processing
+    }
+  }, [projectId]);
 
   const handleEnhancePrompt = async () => {
     const prompt = chatInput.trim();
@@ -2146,9 +2228,18 @@ export default function ProjectWorkspacePage() {
                 </div>
               ) : null}
 
-              {messages.map((message) => (
+              {messages.map((message, messageIndex) => {
+                const isLastAssistant =
+                  message.role === "assistant" &&
+                  messageIndex === messages.length - 1;
+                const isActivelyStreaming =
+                  isLastAssistant &&
+                  isRunning &&
+                  (message.status === "streaming" || message.status === "analyzing");
+
+                return (
+                <div key={message.id} className="flex flex-col gap-2">
                 <div
-                  key={message.id}
                   className={`w-fit max-w-[92%] rounded-2xl px-4 py-2 text-sm leading-relaxed ${
                     message.role === "user"
                       ? "ml-auto bg-blue-500/90 text-white"
@@ -2245,7 +2336,21 @@ export default function ProjectWorkspacePage() {
                     </div>
                   )}
                 </div>
-              ))}
+                {isActivelyStreaming && message.content ? (
+                  <div className="flex items-center gap-1.5 pl-1">
+                    <span className="inline-flex items-center gap-1">
+                      <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground/50" style={{ animationDelay: "0ms" }} />
+                      <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground/50" style={{ animationDelay: "150ms" }} />
+                      <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground/50" style={{ animationDelay: "300ms" }} />
+                    </span>
+                    <span className="text-xs text-muted-foreground/60">
+                      {agentPhase === "generating" ? "Generating" : agentPhase === "thinking" ? "Thinking" : agentPhase === "editing" ? "Editing files" : agentPhase === "installing" ? "Installing" : "Working"}...
+                    </span>
+                  </div>
+                ) : null}
+                </div>
+                );
+              })}
             </div>
 
             {showScrollToBottom ? (
@@ -2331,6 +2436,14 @@ export default function ProjectWorkspacePage() {
                 if (event.key === "Backspace" && !chatInput && mentionedFilePaths.length > 0) {
                   event.preventDefault();
                   removeMentionedFile(mentionedFilePaths[mentionedFilePaths.length - 1]!);
+                  return;
+                }
+
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  if (!isRunning && !isClosing && chatInput.trim()) {
+                    void runPrompt(chatInput);
+                  }
                 }
               }}
               placeholder="Describe what you want to build..."
@@ -2373,14 +2486,26 @@ export default function ProjectWorkspacePage() {
               >
                 {runMode === "build" ? "Build" : "Plan"}
               </Button>
-              <Button
-                size="sm"
-                type="button"
-                disabled={isRunning || isClosing || !chatInput.trim()}
-                onClick={() => void runPrompt(chatInput)}
-              >
-                Send
-              </Button>
+              {isRunning ? (
+                <Button
+                  size="sm"
+                  type="button"
+                  variant="destructive"
+                  onClick={() => void cancelRun()}
+                >
+                  <HiStop className="size-4" />
+                  Stop
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  type="button"
+                  disabled={isClosing || !chatInput.trim()}
+                  onClick={() => void runPrompt(chatInput)}
+                >
+                  Send
+                </Button>
+              )}
             </div>
           </div>
         </section>
@@ -2425,39 +2550,54 @@ export default function ProjectWorkspacePage() {
                 <HiCommandLine className="size-4" />
                 Terminal
               </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                type="button"
-                aria-label="Refresh preview"
-                onClick={() => setPreviewNonce((value) => value + 1)}
-              >
-                <HiArrowPath className="size-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                type="button"
-                aria-label="Refresh files"
-                onClick={() => {
-                  void loadFiles().catch((error: unknown) => {
-                    setActivity(error instanceof Error ? error.message : "Failed to refresh files");
-                  });
-                }}
-              >
-                <HiArrowPath className="size-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                type="button"
-                aria-label="Open preview in new tab"
-                asChild
-              >
-                <a href={previewUrl || "#"} target="_blank" rel="noreferrer">
-                  <HiOutlineArrowTopRightOnSquare className="size-4" />
-                </a>
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    type="button"
+                    aria-label="Refresh preview"
+                    onClick={() => setPreviewNonce((value) => value + 1)}
+                  >
+                    <HiArrowPath className="size-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Refresh preview</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    type="button"
+                    aria-label="Refresh files"
+                    onClick={() => {
+                      void loadFiles().catch((error: unknown) => {
+                        setActivity(error instanceof Error ? error.message : "Failed to refresh files");
+                      });
+                    }}
+                  >
+                    <HiArrowPath className="size-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Refresh files</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    type="button"
+                    aria-label="Open preview in new tab"
+                    asChild
+                  >
+                    <a href={previewUrl || "#"} target="_blank" rel="noreferrer">
+                      <HiOutlineArrowTopRightOnSquare className="size-4" />
+                    </a>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Open in new tab</TooltipContent>
+              </Tooltip>
             </div>
           </header>
 

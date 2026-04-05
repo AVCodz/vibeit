@@ -39,6 +39,10 @@ function getOpenCodeModel() {
   return OpenCodeModel.Zen_MiniMax_M2_5_Free;
 }
 
+function getOpenCodeApiKey(): BoxApiKey | string {
+  return process.env.UPSTASH_OPENCODE_API_KEY || BoxApiKey.UpstashKey;
+}
+
 type ProgressCallback = (event: BootstrapProgressEvent) => void;
 
 const PREVIEW_HEALTHCHECK_COMMAND = `node -e "fetch('http://127.0.0.1:${DEV_PORT}').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"`;
@@ -274,16 +278,29 @@ export async function bootstrapProjectBox(
   options?: BootstrapOptions,
 ): Promise<BootstrapProjectBoxResult> {
   const projectEnv = await getProjectEnvMap(projectId);
+  
+  // Prepare OpenCode agent configuration
+  const openCodeApiKey = getOpenCodeApiKey();
+  const openCodeModel = getOpenCodeModel();
+  
+  // Add Fireworks AI credentials to box environment if using Fireworks
+  const boxEnv: Record<string, string> = {
+    ...projectEnv,
+    VIBEIT_PROJECT_ID: projectId,
+  };
+  
+  // If using Fireworks AI with a direct API key, pass it to OpenCode via env
+  if (typeof openCodeApiKey === 'string' && openCodeApiKey.startsWith('fw_')) {
+    boxEnv.FIREWORKS_API_KEY = openCodeApiKey;
+  }
+  
   const box = await Box.create({
     runtime: "node",
-    env: {
-      ...projectEnv,
-      VIBEIT_PROJECT_ID: projectId,
-    },
+    env: boxEnv,
     agent: {
       provider: Agent.OpenCode,
-      model: getOpenCodeModel(),
-      apiKey: BoxApiKey.UpstashKey,
+      model: openCodeModel,
+      apiKey: openCodeApiKey,
     },
   });
 
