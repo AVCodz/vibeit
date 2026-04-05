@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 
 type AgentPhase =
@@ -54,26 +54,17 @@ const PHASE_PHRASES: Record<AgentPhase, string[]> = {
 
 const CYCLE_INTERVAL = 2400;
 
-function AgentStatusLoader({
-  phase = "analyzing",
+function AgentStatusLoaderInner({
+  phase,
   detail,
   className,
 }: {
-  phase?: AgentPhase;
+  phase: AgentPhase;
   detail?: string;
   className?: string;
 }) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isVisible, setIsVisible] = useState(true);
-  const phaseRef = useRef(phase);
-
-  useEffect(() => {
-    if (phaseRef.current !== phase) {
-      phaseRef.current = phase;
-      setCurrentIndex(0);
-      setIsVisible(true);
-    }
-  }, [phase]);
 
   useEffect(() => {
     const phrases = PHASE_PHRASES[phase] ?? PHASE_PHRASES.idle;
@@ -94,29 +85,49 @@ function AgentStatusLoader({
   const currentPhrase = phrases[currentIndex % phrases.length];
 
   return (
-    <span className={cn("inline-flex flex-col gap-0.5", className)}>
-      <span className="inline-flex items-center gap-1.5">
-        <span className="relative flex size-1.5">
-          <span className="absolute inline-flex size-full animate-ping rounded-full bg-blue-400/60" />
-          <span className="relative inline-flex size-1.5 rounded-full bg-blue-400" />
+    <span className={cn("inline-flex flex-col gap-1", className)}>
+      <span className="inline-flex items-center gap-2">
+        <span className="inline-flex items-center gap-1">
+          <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground/50" style={{ animationDelay: "0ms" }} />
+          <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground/50" style={{ animationDelay: "150ms" }} />
+          <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground/50" style={{ animationDelay: "300ms" }} />
         </span>
         <span
-          key={`${phase}-${currentIndex}`}
+          key={currentIndex}
           className={cn(
-            "text-shimmer text-muted-foreground",
+            "text-muted-foreground/70",
             isVisible ? "animate-status-in" : "animate-status-out",
           )}
         >
-          {currentPhrase}
-          <span className="tracking-widest">...</span>
+          {currentPhrase}...
         </span>
       </span>
       {detail ? (
-        <span className="truncate pl-3 font-mono text-[11px] text-muted-foreground/60">
+        <span className="truncate pl-6 font-mono text-[11px] text-muted-foreground/50">
           {detail}
         </span>
       ) : null}
     </span>
+  );
+}
+
+// Key on phase so the inner component remounts and resets state on phase change
+function AgentStatusLoader({
+  phase = "analyzing",
+  detail,
+  className,
+}: {
+  phase?: AgentPhase;
+  detail?: string;
+  className?: string;
+}) {
+  return (
+    <AgentStatusLoaderInner
+      key={phase}
+      phase={phase}
+      detail={detail}
+      className={className}
+    />
   );
 }
 

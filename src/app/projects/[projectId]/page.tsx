@@ -28,6 +28,7 @@ import {
   HiOutlineArrowTopRightOnSquare,
   HiPlus,
   HiSparkles,
+  HiPaperAirplane,
   HiStop,
   HiTrash,
   HiXMark,
@@ -2337,16 +2338,7 @@ export default function ProjectWorkspacePage() {
                   )}
                 </div>
                 {isActivelyStreaming && message.content ? (
-                  <div className="flex items-center gap-1.5 pl-1">
-                    <span className="inline-flex items-center gap-1">
-                      <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground/50" style={{ animationDelay: "0ms" }} />
-                      <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground/50" style={{ animationDelay: "150ms" }} />
-                      <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground/50" style={{ animationDelay: "300ms" }} />
-                    </span>
-                    <span className="text-xs text-muted-foreground/60">
-                      {agentPhase === "generating" ? "Generating" : agentPhase === "thinking" ? "Thinking" : agentPhase === "editing" ? "Editing files" : agentPhase === "installing" ? "Installing" : "Working"}...
-                    </span>
-                  </div>
+                  <AgentStatusLoader phase={agentPhase} detail={agentDetail} className="pl-1 text-xs" />
                 ) : null}
                 </div>
                 );
@@ -2364,7 +2356,9 @@ export default function ProjectWorkspacePage() {
               </button>
             ) : null}
 
-            <p className="text-xs text-muted-foreground">{activity}</p>
+            {!isRunning && activity ? (
+              <p className="text-xs text-muted-foreground">{activity}</p>
+            ) : null}
           </div>
 
           <div className="relative space-y-3 rounded-xl border border-border/70 bg-background/60 p-3">
@@ -2486,26 +2480,33 @@ export default function ProjectWorkspacePage() {
               >
                 {runMode === "build" ? "Build" : "Plan"}
               </Button>
-              {isRunning ? (
-                <Button
-                  size="sm"
-                  type="button"
-                  variant="destructive"
-                  onClick={() => void cancelRun()}
-                >
-                  <HiStop className="size-4" />
-                  Stop
-                </Button>
-              ) : (
-                <Button
-                  size="sm"
-                  type="button"
-                  disabled={isClosing || !chatInput.trim()}
-                  onClick={() => void runPrompt(chatInput)}
-                >
-                  Send
-                </Button>
-              )}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  {isRunning ? (
+                    <button
+                      type="button"
+                      onClick={() => void cancelRun()}
+                      className="flex size-8 cursor-pointer items-center justify-center rounded-lg bg-red-500/15 text-red-400 transition-all duration-150 hover:bg-red-500/25 hover:text-red-300 active:scale-95"
+                      aria-label="Stop generating"
+                    >
+                      <HiStop className="size-4" />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={isClosing || !chatInput.trim()}
+                      onClick={() => void runPrompt(chatInput)}
+                      className="flex size-8 cursor-pointer items-center justify-center rounded-lg bg-foreground/10 text-muted-foreground transition-all duration-150 hover:bg-foreground/20 hover:text-foreground active:scale-95 disabled:pointer-events-none disabled:opacity-30"
+                      aria-label="Send message"
+                    >
+                      <HiPaperAirplane className="size-4" />
+                    </button>
+                  )}
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  {isRunning ? "Stop generating" : "Send message"}
+                </TooltipContent>
+              </Tooltip>
             </div>
           </div>
         </section>

@@ -4,8 +4,8 @@ import { useLogger } from "@logtail/next/hooks";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { DottedSurface } from "@/components/ui/dotted-surface";
-import { HiPaperClip, HiLightBulb } from "react-icons/hi2";
-import { IoSend } from "react-icons/io5";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { HiPaperAirplane, HiPaperClip, HiSparkles } from "react-icons/hi2";
 import { useRouter } from "next/navigation";
 import { useSession } from "@/lib/auth-client";
 
@@ -18,7 +18,6 @@ const PROMPT_SUFFIXES = [
 ];
 
 export default function Home() {
-  const [planActive, setPlanActive] = useState(false);
   const [promptValue, setPromptValue] = useState("");
   const [isBootstrapping, setIsBootstrapping] = useState(false);
   const [isEnhancing, setIsEnhancing] = useState(false);
@@ -195,11 +194,29 @@ export default function Home() {
       </div>
 
       <div className="animate-fade-up mt-10 w-full max-w-3xl mb-16 opacity-0 [animation-delay:800ms]">
-        <div className="rounded-2xl border border-border/50 bg-card p-5">
+        <div className="relative rounded-2xl border border-border/50 bg-card p-5">
+          {session?.user ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon-sm"
+                  type="button"
+                  variant="secondary"
+                  onClick={() => void handleEnhance()}
+                  disabled={isEnhancing || isBootstrapping || !promptValue.trim()}
+                  className="absolute top-5 right-5"
+                  aria-label="Enhance prompt"
+                >
+                  <HiSparkles className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Enhance prompt</TooltipContent>
+            </Tooltip>
+          ) : null}
           <textarea
             value={promptValue}
             placeholder={`${PROMPT_PREFIX}${displayedText}`}
-            className="min-h-[120px] w-full resize-none bg-transparent text-md text-foreground placeholder:text-muted-foreground focus:outline-none"
+            className="min-h-[120px] w-full resize-none bg-transparent pr-10 text-md text-foreground placeholder:text-muted-foreground focus:outline-none"
             rows={4}
             onChange={(event) => {
               const nextValue = event.target.value;
@@ -213,37 +230,30 @@ export default function Home() {
                 }
               }
             }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                if (!isBootstrapping && promptValue.trim()) {
+                  void handleSend();
+                }
+              }
+            }}
           />
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1">
               <Button variant="secondary" size="icon-sm" type="button">
                 <HiPaperClip className="size-4" />
               </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                type="button"
-                onClick={() => setPlanActive(!planActive)}
-                className="gap-1.5"
-              >
-                <HiLightBulb className="size-4" />
-                Plan
-              </Button>
-              {session?.user ? (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  type="button"
-                  onClick={() => void handleEnhance()}
-                  disabled={isEnhancing || isBootstrapping || !promptValue.trim()}
-                >
-                  {isEnhancing ? "Enhancing..." : "Enhance"}
-                </Button>
-              ) : null}
             </div>
-            <Button size="sm" type="button" disabled={isBootstrapping} onClick={handleSend}>
-              <IoSend className="size-4 -rotate-45 -mr-1" />
-            </Button>
+            <button
+              type="button"
+              disabled={isBootstrapping || !promptValue.trim()}
+              onClick={() => void handleSend()}
+              className="flex size-8 cursor-pointer items-center justify-center rounded-lg bg-foreground/10 text-muted-foreground transition-all duration-150 hover:bg-foreground/20 hover:text-foreground active:scale-95 disabled:pointer-events-none disabled:opacity-30"
+              aria-label="Send message"
+            >
+              <HiPaperAirplane className="size-4 -rotate-45" />
+            </button>
           </div>
         </div>
       </div>
