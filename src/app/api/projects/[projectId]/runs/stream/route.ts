@@ -81,6 +81,9 @@ const OPEN_CODE_PLATFORM_RULES = [
   "Never hardcode API keys, tokens, passwords, or other secrets in source files, examples, or fallback values.",
 ] as const;
 
+const AGENT_STREAM_TIMEOUT_MS = 10 * 60 * 1000;
+const AGENT_STREAM_MAX_ATTEMPTS = 2;
+
 type PromptAttachment = {
   filename: string;
   publicUrl: string;
@@ -345,27 +348,19 @@ export const POST = withBetterStack(async (
             : Promise.resolve();
 
         let assistantContent = "";
+        let finishReceived = false;
+        let finishUsage: unknown;
+        let finishSessionId: string | undefined;
+        let runCompleted = false;
+        let box = await getBoxById(boxId);
 
         try {
-          const box = await getBoxById(boxId);
-          await box.cd(WORKDIR);
-
           const runtimePrompt = buildOpenCodeRuntimePrompt(
             mode,
             prompt,
             mentionedFilePaths,
             resolvedAttachments.map((a) => ({ filename: a.filename, publicUrl: a.public_url })),
           );
-
-          const agentStream = await box.agent.stream({ prompt: runtimePrompt });
-
-          const runAbortController = new AbortController();
-          registerActiveRun(run.id, {
-            cancel: () => agentStream.cancel(),
-            abortController: runAbortController,
-            projectId: project.id,
-            createdAt: Date.now(),
-          });
 
           let dbFlushTimer: ReturnType<typeof setTimeout> | null = null;
           let dbFlushNeeded = false;
@@ -388,62 +383,113 @@ export const POST = withBetterStack(async (
             }, 300);
           };
 
-          for await (const chunk of agentStream) {
-            if (chunk.type === "text-delta") {
-              assistantContent += chunk.text;
-              scheduleDbFlush();
-              push("run.text", { text: chunk.text });
-              continue;
+          for (let attempt = 1; attempt <= AGENT_STREAM_MAX_ATTEMPTS; attempt += 1) {
+            finishReceived = false;
+            finishUsage = undefined;
+            finishSessionId = undefined;
+
+            // Re-check and re-fetch box before each attempt in case the prior stream destabilized it.
+            if (attempt > 1) {
+              await new Promise((resolve) => setTimeout(resolve, 750));
+              box = await getBoxById(boxId);
             }
 
-            if (chunk.type === "reasoning") {
-              push("run.reasoning", { text: chunk.text });
-              continue;
+            const boxCheck = await box.exec.command("true").catch(() => null);
+            if (!boxCheck || boxCheck.status !== "completed") {
+              throw new Error("Box is no longer reachable. Please reopen the project.");
             }
 
-            if (chunk.type === "start") {
-              push("run.agent-started", { runId: chunk.runId });
-              continue;
-            }
+            await box.cd(WORKDIR);
 
-            if (chunk.type === "tool-call") {
-              const truncatedInput: Record<string, unknown> = {};
-              for (const [key, value] of Object.entries(chunk.input)) {
-                if (typeof value === "string" && value.length > 500) {
-                  truncatedInput[key] = value.slice(0, 500) + "…";
-                } else {
-                  truncatedInput[key] = value;
+            const agentStream = await box.agent.stream({
+              prompt: runtimePrompt,
+              timeout: AGENT_STREAM_TIMEOUT_MS,
+            });
+
+            const runAbortController = new AbortController();
+            registerActiveRun(run.id, {
+              cancel: () => agentStream.cancel(),
+              abortController: runAbortController,
+              projectId: project.id,
+              createdAt: Date.now(),
+            });
+
+            for await (const chunk of agentStream) {
+              if (chunk.type === "text-delta") {
+                assistantContent += chunk.text;
+                scheduleDbFlush();
+                push("run.text", { text: chunk.text });
+                continue;
+              }
+
+              if (chunk.type === "reasoning") {
+                push("run.reasoning", { text: chunk.text });
+                continue;
+              }
+
+              if (chunk.type === "start") {
+                push("run.agent-started", { runId: chunk.runId });
+                continue;
+              }
+
+              if (chunk.type === "tool-call") {
+                const truncatedInput: Record<string, unknown> = {};
+                for (const [key, value] of Object.entries(chunk.input)) {
+                  if (typeof value === "string" && value.length > 500) {
+                    truncatedInput[key] = value.slice(0, 500) + "…";
+                  } else {
+                    truncatedInput[key] = value;
+                  }
                 }
+                push("run.tool", { name: chunk.toolName, input: truncatedInput });
+                continue;
               }
-              push("run.tool", { name: chunk.toolName, input: truncatedInput });
-              continue;
+
+              if (chunk.type === "stats") {
+                push("run.stats", {
+                  cpuNs: chunk.cpuNs,
+                  memoryPeakBytes: chunk.memoryPeakBytes,
+                });
+                continue;
+              }
+
+              if (chunk.type === "finish") {
+                if (assistantContent.length === 0 && chunk.output.trim().length > 0) {
+                  assistantContent = chunk.output;
+                }
+
+                finishReceived = true;
+                finishUsage = chunk.usage;
+                finishSessionId = chunk.sessionId;
+              }
             }
 
-            if (chunk.type === "stats") {
-              push("run.stats", {
-                cpuNs: chunk.cpuNs,
-                memoryPeakBytes: chunk.memoryPeakBytes,
+            if (finishReceived) {
+              break;
+            }
+
+            removeActiveRun(run.id);
+
+            if (assistantContent.length > 0) {
+              throw new Error("Agent stream ended unexpectedly before completion");
+            }
+
+            if (attempt < AGENT_STREAM_MAX_ATTEMPTS) {
+              log.warn("Retrying agent stream after empty termination", {
+                projectId: project.id,
+                sessionId: activeProjectSession.id,
+                runId: run.id,
+                attempt,
+                userId: session.user.id,
               });
               continue;
             }
 
-            if (chunk.type === "finish") {
-              if (assistantContent.length === 0 && chunk.output.trim().length > 0) {
-                assistantContent = chunk.output;
-              }
+            throw new Error("Agent stream ended without producing a final response");
+          }
 
-              push("run.finished", {
-                output: assistantContent,
-                usage: chunk.usage,
-                sessionId: chunk.sessionId,
-                assistantMessageId: assistantMessage.id,
-              });
-
-              void query(
-                "update project_messages set content = $1, status = $2, updated_at = $3 where id = $4",
-                [assistantContent, "completed", new Date(), assistantMessage.id],
-              );
-            }
+          if (!finishReceived) {
+            throw new Error("Agent stream ended without producing a final response");
           }
 
           removeActiveRun(run.id);
@@ -452,10 +498,22 @@ export const POST = withBetterStack(async (
           await Promise.all([
             flushContentToDb(),
             query(
+              "update project_messages set content = $1, status = $2, updated_at = $3 where id = $4",
+              [assistantContent, "completed", new Date(), assistantMessage.id],
+            ),
+            query(
               "update agent_runs set status = $1, completed_at = $2 where id = $3",
               ["completed", new Date(), run.id],
             ),
           ]);
+
+          push("run.finished", {
+            output: assistantContent,
+            usage: finishUsage,
+            sessionId: finishSessionId,
+            assistantMessageId: assistantMessage.id,
+          });
+          runCompleted = true;
 
           if (mode === "build") {
             const sessionStateResult = await query<{
@@ -574,6 +632,24 @@ export const POST = withBetterStack(async (
             error instanceof Error &&
             (error.name === "AbortError" || error.message.includes("cancel"));
 
+          if (runCompleted) {
+            log.error("Preview lifecycle failed after successful run", {
+              projectId: project.id,
+              sessionId: activeProjectSession.id,
+              runId: run.id,
+              runMode: mode,
+              userId: session.user.id,
+              ...serializeError(error),
+            });
+
+            push("preview.status", {
+              message: error instanceof Error ? error.message : "Preview refresh failed",
+            });
+            push("run.completed", { runId: run.id });
+            closeStream();
+            return;
+          }
+
           if (isCancelled) {
             log.info("Project run cancelled", {
               projectId: project.id,
@@ -637,6 +713,8 @@ export const POST = withBetterStack(async (
             push("run.failed", {
               runId: run.id,
               error: error instanceof Error ? error.message : "Unknown run failure",
+              output: assistantContent,
+              assistantMessageId: assistantMessage.id,
             });
           }
           closeStream();

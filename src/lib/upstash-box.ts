@@ -287,6 +287,7 @@ export async function bootstrapProjectBox(
   const boxEnv: Record<string, string> = {
     ...projectEnv,
     VIBEIT_PROJECT_ID: projectId,
+    OPENCODE_DISABLE_LSP_DOWNLOAD: "true",
   };
   
   // If using Fireworks AI with a direct API key, pass it to OpenCode via env

@@ -1590,8 +1590,6 @@ export default function ProjectWorkspacePage() {
             if (eventName === "preview.status") {
               if (typeof payload.message === "string" && payload.message.length > 0) {
                 setActivity(payload.message);
-                setAgentPhase("preview");
-                setAgentDetail(payload.message);
                 pushTerminalLog(payload.message);
               }
               continue;
@@ -1600,9 +1598,9 @@ export default function ProjectWorkspacePage() {
             if (eventName === "preview.ready") {
               if (typeof payload.previewUrl === "string" && payload.previewUrl.length > 0) {
                 setPreviewUrlWithRoute(payload.previewUrl);
-                setAgentDetail(payload.previewUrl);
               }
-              setActivity("Preview ready");
+              setAgentPhase("idle");
+              setAgentDetail("");
               continue;
             }
 
@@ -1716,6 +1714,10 @@ export default function ProjectWorkspacePage() {
                 message.id === assistantMessageId
                   ? {
                       ...message,
+                      content:
+                        typeof payload.output === "string" && payload.output.length > 0
+                          ? payload.output
+                          : message.content,
                       status: "failed",
                     }
                   : message,
@@ -1886,12 +1888,28 @@ export default function ProjectWorkspacePage() {
       if (attachmentIdsParam) {
         setInitialAttachmentIds(attachmentIdsParam.split(",").filter(Boolean));
       }
+
+      // Read attachment metadata from sessionStorage (set by landing page)
+      let initialAttachments: MessageAttachment[] | undefined;
+      if (projectId) {
+        try {
+          const stored = sessionStorage.getItem(`vibeit:attachments:${projectId}`);
+          if (stored) {
+            initialAttachments = JSON.parse(stored) as MessageAttachment[];
+            sessionStorage.removeItem(`vibeit:attachments:${projectId}`);
+          }
+        } catch {
+          // ignore parse errors
+        }
+      }
+
       setMessages([
         {
           id: initialUserMessageId,
           role: "user",
           content: initialPrompt,
           status: "completed",
+          attachments: initialAttachments,
         },
         {
           id: initialAssistantMessageId,
@@ -2391,6 +2409,15 @@ export default function ProjectWorkspacePage() {
                   isRunning &&
                   (message.status === "streaming" || message.status === "analyzing");
 
+                // Hide empty assistant messages from old failed/stuck runs
+                if (
+                  message.role === "assistant" &&
+                  !message.content &&
+                  !isLastAssistant
+                ) {
+                  return null;
+                }
+
                 return (
                 <div key={message.id} className="flex flex-col gap-2">
                 <div
@@ -2443,8 +2470,12 @@ export default function ProjectWorkspacePage() {
                           {message.content}
                         </ReactMarkdown>
                       </div>
+                    ) : isLastAssistant && (isRunning || isOpening || Boolean(queuedPrompt)) ? (
+                      <AgentStatusLoader phase={isOpening ? "analyzing" : agentPhase} detail={agentDetail} className="py-0.5 text-sm" />
+                    ) : message.status === "failed" ? (
+                      <span className="text-sm text-red-400/80">Generation failed.</span>
                     ) : (
-                      <AgentStatusLoader phase={agentPhase} detail={agentDetail} className="py-0.5 text-sm" />
+                      <span className="text-sm text-muted-foreground/60">Generation stopped.</span>
                     )
                   ) : (
                     <>
@@ -2605,6 +2636,22 @@ export default function ProjectWorkspacePage() {
               onChange={(event) => handleChatInputChange(event.target.value, event.target.selectionStart)}
               onClick={(event) => setChatCursorIndex(event.currentTarget.selectionStart ?? chatInput.length)}
               onKeyUp={(event) => setChatCursorIndex(event.currentTarget.selectionStart ?? chatInput.length)}
+              onPaste={(event) => {
+                const items = event.clipboardData.items;
+                const imageFiles: File[] = [];
+                for (let i = 0; i < items.length; i++) {
+                  const item = items[i];
+                  if (item && item.type.startsWith("image/")) {
+                    const file = item.getAsFile();
+                    if (file) imageFiles.push(file);
+                  }
+                }
+                if (imageFiles.length > 0) {
+                  const dt = new DataTransfer();
+                  for (const file of imageFiles) dt.items.add(file);
+                  handleAttachFiles(dt.files);
+                }
+              }}
               onKeyDown={(event) => {
                 if (mentionSuggestions.length > 0) {
                   if (event.key === "ArrowDown") {
@@ -2835,8 +2882,8 @@ export default function ProjectWorkspacePage() {
                   <iframe
                     src={`${previewUrl}${previewUrl.includes("?") ? "&" : "?"}v=${previewNonce}`}
                     title="Project preview"
-                    className="h-full w-full"
-                    sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
+                    className="h-full w-full bg-white"
+                    sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
                   />
                 ) : (
                   <div className="grid h-full place-items-center p-8 text-center">

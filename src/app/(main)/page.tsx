@@ -141,6 +141,7 @@ export default function Home() {
 
       // Upload images to the new project if any are attached
       const attachmentIds: string[] = [];
+      const attachmentMetas: Array<{ id: string; filename: string; contentType: string; sizeBytes: number; publicUrl: string }> = [];
 
       if (pendingImages.length > 0) {
         for (const img of pendingImages) {
@@ -154,15 +155,37 @@ export default function Home() {
 
           const uploadData = (await uploadResponse.json()) as {
             attachmentId?: string;
+            filename?: string;
+            contentType?: string;
+            sizeBytes?: number;
+            publicUrl?: string;
             error?: string;
           };
 
           if (uploadResponse.ok && uploadData.attachmentId) {
             attachmentIds.push(uploadData.attachmentId);
+            attachmentMetas.push({
+              id: uploadData.attachmentId,
+              filename: uploadData.filename ?? img.file.name,
+              contentType: uploadData.contentType ?? img.file.type,
+              sizeBytes: uploadData.sizeBytes ?? img.file.size,
+              publicUrl: uploadData.publicUrl ?? "",
+            });
           }
         }
 
-        // Clean up preview URLs
+        // Store attachment metadata for the project page to read
+        if (attachmentMetas.length > 0) {
+          try {
+            sessionStorage.setItem(
+              `vibeit:attachments:${data.projectId}`,
+              JSON.stringify(attachmentMetas),
+            );
+          } catch {
+            // sessionStorage may be full or unavailable
+          }
+        }
+
         for (const img of pendingImages) {
           URL.revokeObjectURL(img.previewUrl);
         }
