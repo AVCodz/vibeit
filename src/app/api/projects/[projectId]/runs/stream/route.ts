@@ -11,9 +11,16 @@ type RunMode = "build" | "plan";
 type RunStreamBody = {
   prompt?: string;
   mentionedFilePaths?: unknown;
+  attachmentIds?: unknown;
   userMessageId?: string;
   assistantMessageId?: string;
   mode?: RunMode;
+};
+
+type AttachmentRow = {
+  id: string;
+  filename: string;
+  public_url: string;
 };
 
 type ProjectMessageRow = {
@@ -74,7 +81,17 @@ const OPEN_CODE_PLATFORM_RULES = [
   "Never hardcode API keys, tokens, passwords, or other secrets in source files, examples, or fallback values.",
 ] as const;
 
-function buildOpenCodeRuntimePrompt(mode: RunMode, prompt: string, mentionedFilePaths: string[]) {
+type PromptAttachment = {
+  filename: string;
+  publicUrl: string;
+};
+
+function buildOpenCodeRuntimePrompt(
+  mode: RunMode,
+  prompt: string,
+  mentionedFilePaths: string[],
+  attachments: PromptAttachment[],
+) {
   const mentionInstructions = mentionedFilePaths.length > 0
     ? [
         "The user explicitly mentioned these workspace files:",
@@ -84,11 +101,19 @@ function buildOpenCodeRuntimePrompt(mode: RunMode, prompt: string, mentionedFile
       ]
     : [];
 
+  const attachmentInstructions = attachments.length > 0
+    ? [
+        "The user attached these reference images. Examine them carefully and use them as visual context for the task:",
+        ...attachments.map((a) => `- ${a.filename}: ${a.publicUrl}`),
+      ]
+    : [];
+
   const promptParts =
     mode === "plan"
       ? [
           ...OPEN_CODE_PLATFORM_RULES,
           ...mentionInstructions,
+          ...attachmentInstructions,
           "You are in PLAN MODE.",
           "Do not modify files.",
           "Do not run shell commands that change project state.",
@@ -99,6 +124,7 @@ function buildOpenCodeRuntimePrompt(mode: RunMode, prompt: string, mentionedFile
       : [
           ...OPEN_CODE_PLATFORM_RULES,
           ...mentionInstructions,
+          ...attachmentInstructions,
           "Implement the requested changes directly in this project.",
           "If environment variables are required, explain which variables are needed and direct the user to the Settings tab.",
           prompt,
@@ -123,6 +149,9 @@ export const POST = withBetterStack(async (
   const body = (await request.json()) as RunStreamBody;
   const prompt = body.prompt?.trim();
   const mentionedFilePaths = normalizeMentionedFilePaths(body.mentionedFilePaths);
+  const attachmentIds = Array.isArray(body.attachmentIds)
+    ? (body.attachmentIds as unknown[]).filter((v): v is string => typeof v === "string").slice(0, 30)
+    : [];
   const mode = body.mode === "plan" ? "plan" : "build";
 
   if (!prompt) {
@@ -242,6 +271,24 @@ export const POST = withBetterStack(async (
     return Response.json({ error: "Unable to initialize messages for run" }, { status: 500 });
   }
 
+  // Resolve attachment URLs and link them to the user message
+  let resolvedAttachments: AttachmentRow[] = [];
+
+  if (attachmentIds.length > 0) {
+    const attachmentsResult = await query<AttachmentRow>(
+      "select id, filename, public_url from message_attachments where id = any($1::uuid[]) and project_id = $2",
+      [attachmentIds, project.id],
+    );
+    resolvedAttachments = attachmentsResult.rows;
+
+    if (resolvedAttachments.length > 0) {
+      await query(
+        "update message_attachments set message_id = $1 where id = any($2::uuid[])",
+        [userMessage.id, resolvedAttachments.map((a) => a.id)],
+      );
+    }
+  }
+
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream<Uint8Array>({
@@ -303,7 +350,12 @@ export const POST = withBetterStack(async (
           const box = await getBoxById(boxId);
           await box.cd(WORKDIR);
 
-          const runtimePrompt = buildOpenCodeRuntimePrompt(mode, prompt, mentionedFilePaths);
+          const runtimePrompt = buildOpenCodeRuntimePrompt(
+            mode,
+            prompt,
+            mentionedFilePaths,
+            resolvedAttachments.map((a) => ({ filename: a.filename, publicUrl: a.public_url })),
+          );
 
           const agentStream = await box.agent.stream({ prompt: runtimePrompt });
 

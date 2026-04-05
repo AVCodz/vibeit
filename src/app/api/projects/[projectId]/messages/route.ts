@@ -12,6 +12,15 @@ type ProjectMessageRow = {
   created_at: string;
 };
 
+type AttachmentRow = {
+  id: string;
+  message_id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  public_url: string;
+};
+
 export const GET = withBetterStack(async (
   request: BetterStackRequest,
   context: { params: Promise<{ projectId: string }> },
@@ -55,6 +64,22 @@ export const GET = withBetterStack(async (
       [projectId],
     );
 
+    const messageIds = messagesResult.rows.map((row) => row.id);
+    const attachmentsByMessage = new Map<string, AttachmentRow[]>();
+
+    if (messageIds.length > 0) {
+      const attachmentsResult = await query<AttachmentRow>(
+        "select id, message_id, filename, content_type, size_bytes, public_url from message_attachments where message_id = any($1::uuid[])",
+        [messageIds],
+      );
+
+      for (const row of attachmentsResult.rows) {
+        const existing = attachmentsByMessage.get(row.message_id) ?? [];
+        existing.push(row);
+        attachmentsByMessage.set(row.message_id, existing);
+      }
+    }
+
     log.info("Project messages request completed", {
       outcome: "success",
       statusCode: 200,
@@ -65,14 +90,24 @@ export const GET = withBetterStack(async (
     });
 
     return Response.json({
-      messages: messagesResult.rows.map((row) => ({
-        id: row.id,
-        runId: row.run_id,
-        role: row.role,
-        content: row.content,
-        status: row.status,
-        createdAt: row.created_at,
-      })),
+      messages: messagesResult.rows.map((row) => {
+        const attachments = attachmentsByMessage.get(row.id) ?? [];
+        return {
+          id: row.id,
+          runId: row.run_id,
+          role: row.role,
+          content: row.content,
+          status: row.status,
+          createdAt: row.created_at,
+          attachments: attachments.map((a) => ({
+            id: a.id,
+            filename: a.filename,
+            contentType: a.content_type,
+            sizeBytes: a.size_bytes,
+            publicUrl: a.public_url,
+          })),
+        };
+      }),
     });
   } catch (error) {
     log.error("Project messages request failed", {

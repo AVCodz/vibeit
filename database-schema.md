@@ -103,6 +103,38 @@
   - `created_at`
   - `updated_at`
 
+- `project_messages`
+  - `id`
+  - `project_id` (FK to `projects.id`)
+  - `run_id` (FK to `agent_runs.id`, nullable)
+  - `role` (`user | assistant`)
+  - `content`
+  - `status` (`analyzing | streaming | completed | failed | pending`)
+  - `created_at`
+  - `updated_at`
+
+- `message_attachments`
+  - `id`
+  - `project_id` (FK to `projects.id`)
+  - `message_id` (FK to `project_messages.id`, nullable — linked after upload)
+  - `filename`
+  - `content_type` (MIME type, e.g. `image/png`)
+  - `size_bytes`
+  - `r2_key` (storage path in Cloudflare R2)
+  - `public_url` (CDN URL for the image)
+  - `created_at`
+
+- `project_env_vars`
+  - `id`
+  - `project_id` (FK to `projects.id`)
+  - `key`
+  - `encrypted_value`
+  - `iv`
+  - `auth_tag`
+  - `created_at`
+  - `updated_at`
+  - Unique constraint: `(project_id, key)`
+
 - `usage_events`
   - `id`
   - `user_id` (FK to Better Auth `user.id`)

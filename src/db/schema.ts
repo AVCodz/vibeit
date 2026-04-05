@@ -157,6 +157,22 @@ export const projectEnvVars = pgTable(
   (table) => [unique("project_env_vars_project_key_unique").on(table.projectId, table.key)],
 );
 
+export const messageAttachments = pgTable("message_attachments", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  projectId: uuid("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  messageId: uuid("message_id").references(() => projectMessages.id, {
+    onDelete: "set null",
+  }),
+  filename: text("filename").notNull(),
+  contentType: text("content_type").notNull(),
+  sizeBytes: bigint("size_bytes", { mode: "number" }).notNull().default(0),
+  r2Key: text("r2_key").notNull(),
+  publicUrl: text("public_url").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const usageEvents = pgTable("usage_events", {
   id: uuid("id").defaultRandom().primaryKey(),
   userId: text("user_id")

@@ -257,6 +257,57 @@ export async function restoreProjectWorkspaceFromR2(params: { box: Box; r2Prefix
   return { restored };
 }
 
+const ALLOWED_IMAGE_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/gif",
+  "image/webp",
+  "image/bmp",
+  "image/tiff",
+]);
+
+const MAX_ATTACHMENT_SIZE = 5 * 1024 * 1024; // 5MB (Fireworks AI URL limit)
+
+export function isAllowedImageType(contentType: string) {
+  return ALLOWED_IMAGE_TYPES.has(contentType.toLowerCase());
+}
+
+export function isWithinAttachmentSizeLimit(sizeBytes: number) {
+  return sizeBytes <= MAX_ATTACHMENT_SIZE;
+}
+
+export async function uploadMessageAttachment(params: {
+  r2Prefix: string;
+  attachmentId: string;
+  filename: string;
+  bytes: Uint8Array;
+  contentType: string;
+}) {
+  const { r2Prefix, attachmentId, filename, bytes, contentType } = params;
+  const client = getR2Client();
+  const bucket = getBucketName();
+
+  const sanitizedFilename = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const key = `${r2Prefix}/attachments/${attachmentId}/${sanitizedFilename}`;
+
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: bytes,
+      ContentType: contentType,
+    }),
+  );
+
+  const publicBase = process.env.R2_PUBLIC_BASE_URL;
+  const publicUrl = publicBase
+    ? `${publicBase.replace(/\/$/, "")}/${key}`
+    : key;
+
+  return { key, publicUrl };
+}
+
 export async function uploadProjectThumbnail(params: {
   r2Prefix: string;
   bytes: Uint8Array;

@@ -235,33 +235,14 @@ export const POST = withBetterStack(async (
                   message: event.message,
                 });
               },
-              skipPreviewStartup: hasPendingInitialRun,
+              // Always start preview so the user sees live updates while the agent works
+              skipPreviewStartup: false,
             },
           );
 
-          let sessionStatus = "bootstrapped";
-          let previewUrl: string | null = null;
-          let previewReachable = false;
-
-          if (!hasPendingInitialRun) {
-            push("open.status", {
-              step: "start.preview",
-              message: "Starting preview server...",
-            });
-
-            const preview = await ensureProjectPreview(await getBoxById(box.boxId), (event) => {
-              if (event.kind === "status") {
-                push("open.status", {
-                  step: event.step,
-                  message: event.message,
-                });
-              }
-            });
-
-            sessionStatus = "ready";
-            previewUrl = preview.previewUrl;
-            previewReachable = preview.previewReachable;
-          }
+          const sessionStatus = "ready";
+          const previewUrl = box.previewUrl;
+          const previewReachable = box.previewReachable;
 
           const sessionInsertResult = await query<{ id: string }>(
             "insert into project_sessions (project_id, upstash_box_id, preview_url, preview_port, session_status, started_at, created_at, updated_at) values ($1, $2, $3, $4, $5, $6, $7, $8) returning id",

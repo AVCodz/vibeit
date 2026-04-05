@@ -29,6 +29,7 @@ import {
   HiPlus,
   HiSparkles,
   HiPaperAirplane,
+  HiPaperClip,
   HiStop,
   HiTrash,
   HiXMark,
@@ -62,11 +63,29 @@ type WorkspaceFile = {
   content?: string;
 };
 
+type MessageAttachment = {
+  id: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  publicUrl: string;
+};
+
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
   status: "analyzing" | "streaming" | "completed" | "failed";
+  attachments?: MessageAttachment[];
+};
+
+type PendingAttachment = {
+  id: string;
+  file: File;
+  previewUrl: string;
+  uploading: boolean;
+  uploadedId?: string;
+  publicUrl?: string;
 };
 
 type FileNode = {
@@ -546,6 +565,10 @@ export default function ProjectWorkspacePage() {
   const [selectedFilePath, setSelectedFilePath] = useState("");
   const [chatInput, setChatInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const pendingAttachmentsRef = useRef<PendingAttachment[]>([]);
+  pendingAttachmentsRef.current = pendingAttachments;
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [isMessagesLoading, setIsMessagesLoading] = useState(true);
   const [terminalLogs, setTerminalLogs] = useState<string[]>([]);
   const [activity, setActivity] = useState("Ready");
@@ -567,6 +590,7 @@ export default function ProjectWorkspacePage() {
     userId: string;
     assistantId: string;
   } | null>(null);
+  const [initialAttachmentIds, setInitialAttachmentIds] = useState<string[]>([]);
   const [isFileContentLoading, setIsFileContentLoading] = useState(false);
   const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({
     src: true,
@@ -901,6 +925,7 @@ export default function ProjectWorkspacePage() {
           role: "user" | "assistant";
           content: string;
           status: "analyzing" | "streaming" | "completed" | "failed";
+          attachments?: MessageAttachment[];
         }>;
         error?: string;
       };
@@ -1283,6 +1308,92 @@ export default function ProjectWorkspacePage() {
     }
   }, [envVars, projectId, pushTerminalLog, setPreviewUrlWithRoute]);
 
+  const handleAttachFiles = useCallback((files: FileList | null) => {
+    if (!files || files.length === 0) return;
+
+    const newAttachments: PendingAttachment[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!file) continue;
+
+      const isImage = file.type.startsWith("image/");
+      if (!isImage) continue;
+
+      if (file.size > 5 * 1024 * 1024) continue; // 5MB limit
+
+      newAttachments.push({
+        id: crypto.randomUUID(),
+        file,
+        previewUrl: URL.createObjectURL(file),
+        uploading: false,
+      });
+    }
+
+    setPendingAttachments((current) => [...current, ...newAttachments].slice(0, 30));
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }, []);
+
+  const removeAttachment = useCallback((attachmentId: string) => {
+    setPendingAttachments((current) => {
+      const removed = current.find((a) => a.id === attachmentId);
+      if (removed?.previewUrl) {
+        URL.revokeObjectURL(removed.previewUrl);
+      }
+      return current.filter((a) => a.id !== attachmentId);
+    });
+  }, []);
+
+  const uploadPendingAttachments = useCallback(async (attachments: PendingAttachment[]): Promise<string[]> => {
+    if (attachments.length === 0 || !projectId) return [];
+
+    const uploadedIds: string[] = [];
+
+    for (const attachment of attachments) {
+      if (attachment.uploadedId) {
+        uploadedIds.push(attachment.uploadedId);
+        continue;
+      }
+
+      setPendingAttachments((current) =>
+        current.map((a) => (a.id === attachment.id ? { ...a, uploading: true } : a)),
+      );
+
+      const formData = new FormData();
+      formData.append("file", attachment.file);
+
+      const response = await fetch(`/api/projects/${projectId}/attachments/upload`, {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = (await response.json()) as {
+        attachmentId?: string;
+        publicUrl?: string;
+        error?: string;
+      };
+
+      if (!response.ok || !data.attachmentId) {
+        throw new Error(data.error ?? `Failed to upload ${attachment.file.name}`);
+      }
+
+      uploadedIds.push(data.attachmentId);
+
+      setPendingAttachments((current) =>
+        current.map((a) =>
+          a.id === attachment.id
+            ? { ...a, uploading: false, uploadedId: data.attachmentId, publicUrl: data.publicUrl }
+            : a,
+        ),
+      );
+    }
+
+    return uploadedIds;
+  }, [projectId]);
+
   const runPrompt = useCallback(async (
     prompt: string,
     options?: {
@@ -1290,6 +1401,7 @@ export default function ProjectWorkspacePage() {
         userId: string;
         assistantId: string;
       };
+      preUploadedAttachmentIds?: string[];
     },
   ) => {
     const trimmedPrompt = prompt.trim();
@@ -1321,6 +1433,18 @@ export default function ProjectWorkspacePage() {
       : `temp-assistant-${randomId()}`;
     let assistantMessageId = tempAssistantMessageId;
 
+    // Snapshot current attachments from ref (avoids stale closure in useCallback)
+    const currentAttachments = [...pendingAttachmentsRef.current];
+    const inlineAttachments: MessageAttachment[] = currentAttachments
+      .filter((a) => a.previewUrl)
+      .map((a) => ({
+        id: a.id,
+        filename: a.file.name,
+        contentType: a.file.type,
+        sizeBytes: a.file.size,
+        publicUrl: a.publicUrl ?? a.previewUrl,
+      }));
+
     if (existingMessageIds) {
       setMessages((current) =>
         current.map((message) =>
@@ -1335,13 +1459,28 @@ export default function ProjectWorkspacePage() {
     } else {
       setMessages((current) => [
         ...current,
-        { id: tempUserMessageId, role: "user", content: trimmedPrompt, status: "completed" },
+        {
+          id: tempUserMessageId,
+          role: "user",
+          content: trimmedPrompt,
+          status: "completed",
+          attachments: inlineAttachments.length > 0 ? inlineAttachments : undefined,
+        },
         { id: tempAssistantMessageId, role: "assistant", content: "", status: "analyzing" },
       ]);
     }
 
     try {
       let shouldForcePreviewReload = false;
+
+      // Upload pending attachments to R2 before starting the run
+      let attachmentIds: string[] = options?.preUploadedAttachmentIds ?? [];
+      if (currentAttachments.length > 0) {
+        setActivity("Uploading images...");
+        const uploaded = await uploadPendingAttachments(currentAttachments);
+        attachmentIds = [...attachmentIds, ...uploaded];
+        setPendingAttachments([]);
+      }
 
       const abortController = new AbortController();
       runAbortControllerRef.current = abortController;
@@ -1354,6 +1493,7 @@ export default function ProjectWorkspacePage() {
         body: JSON.stringify({
           prompt: trimmedPrompt,
           mentionedFilePaths: resolvedMentionedFilePaths,
+          attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
           userMessageId: existingMessageIds?.userId,
           assistantMessageId: existingMessageIds?.assistantId,
           mode: runMode,
@@ -1417,6 +1557,7 @@ export default function ProjectWorkspacePage() {
                             ? payload.userMessage.content
                             : trimmedPrompt,
                         status: "completed",
+                        attachments: message.attachments,
                       }
                     : message,
                 ),
@@ -1639,7 +1780,7 @@ export default function ProjectWorkspacePage() {
       setInitialMessageIds(null);
       setActiveRunId(null);
     }
-  }, [appendAssistantText, applyProjectName, availableMentionPathSet, isWorkspaceReady, loadFiles, loadMessages, previewUrl, projectId, pushTerminalLog, resetTerminalLogs, runMode, setPreviewUrlWithRoute, upsertFileFromToolInput]);
+  }, [appendAssistantText, applyProjectName, availableMentionPathSet, isWorkspaceReady, loadFiles, loadMessages, previewUrl, projectId, pushTerminalLog, resetTerminalLogs, runMode, setPreviewUrlWithRoute, uploadPendingAttachments, upsertFileFromToolInput]);
 
   const cancelRun = useCallback(async () => {
     // Abort the client-side SSE reader
@@ -1723,6 +1864,7 @@ export default function ProjectWorkspacePage() {
     const initialUserMessageId = query.get("umid") ?? "";
     const initialAssistantMessageId = query.get("amid") ?? "";
     const autoStart = query.get("autostart") === "1";
+    const attachmentIdsParam = query.get("attachments") ?? "";
 
     if (initialName) {
       applyProjectName(initialName);
@@ -1741,6 +1883,9 @@ export default function ProjectWorkspacePage() {
         userId: initialUserMessageId,
         assistantId: initialAssistantMessageId,
       });
+      if (attachmentIdsParam) {
+        setInitialAttachmentIds(attachmentIdsParam.split(",").filter(Boolean));
+      }
       setMessages([
         {
           id: initialUserMessageId,
@@ -1764,6 +1909,7 @@ export default function ProjectWorkspacePage() {
         params.delete("prompt");
         params.delete("umid");
         params.delete("amid");
+        params.delete("attachments");
       });
     }
 
@@ -1946,10 +2092,17 @@ export default function ProjectWorkspacePage() {
       return;
     }
 
+    const attachmentIds = initialAttachmentIds.length > 0 ? initialAttachmentIds : undefined;
+
     void runPrompt(queuedPrompt, {
       existingMessageIds: initialMessageIds ?? undefined,
+      preUploadedAttachmentIds: attachmentIds,
     });
-  }, [initialMessageIds, isOpening, isRunning, isWorkspaceReady, queuedPrompt, runPrompt]);
+
+    if (attachmentIds) {
+      setInitialAttachmentIds([]);
+    }
+  }, [initialAttachmentIds, initialMessageIds, isOpening, isRunning, isWorkspaceReady, queuedPrompt, runPrompt]);
 
   useEffect(() => {
     if (!projectId || !isWorkspaceReady) {
@@ -2294,6 +2447,19 @@ export default function ProjectWorkspacePage() {
                       <AgentStatusLoader phase={agentPhase} detail={agentDetail} className="py-0.5 text-sm" />
                     )
                   ) : (
+                    <>
+                    {message.attachments && message.attachments.length > 0 ? (
+                      <div className="mb-2 flex flex-wrap gap-1.5">
+                        {message.attachments.map((attachment) => (
+                          <img
+                            key={attachment.id}
+                            src={attachment.publicUrl}
+                            alt={attachment.filename}
+                            className="max-h-24 max-w-32 rounded-lg object-cover"
+                          />
+                        ))}
+                      </div>
+                    ) : null}
                     <div className="prose prose-sm prose-invert max-w-none wrap-break-word text-white prose-p:my-1.5 prose-p:text-white prose-ul:my-1.5 prose-ul:text-white prose-ol:my-1.5 prose-ol:text-white prose-li:my-0.5 prose-li:text-white prose-li:marker:text-white prose-headings:mb-2 prose-headings:mt-3 prose-headings:text-white prose-strong:text-white prose-pre:my-2 prose-pre:rounded-lg prose-pre:bg-blue-900/40 prose-pre:p-3 prose-code:rounded prose-code:bg-blue-900/30 prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[13px] prose-code:text-white prose-code:before:content-none prose-code:after:content-none">
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
@@ -2335,6 +2501,7 @@ export default function ProjectWorkspacePage() {
                         {message.content}
                       </ReactMarkdown>
                     </div>
+                    </>
                   )}
                 </div>
                 {isActivelyStreaming && message.content ? (
@@ -2360,6 +2527,40 @@ export default function ProjectWorkspacePage() {
               <p className="text-xs text-muted-foreground">{activity}</p>
             ) : null}
           </div>
+
+          {pendingAttachments.length > 0 ? (
+            <div className="flex flex-wrap gap-2 mb-2">
+              {pendingAttachments.map((attachment) => (
+                <div key={attachment.id} className="group relative">
+                  <img
+                    src={attachment.previewUrl}
+                    alt={attachment.file.name}
+                    className={cn(
+                      "size-14 rounded-xl border border-border/40 object-cover",
+                      attachment.uploading && "opacity-40",
+                    )}
+                  />
+                  <div className="pointer-events-none absolute inset-x-0 bottom-0 hidden rounded-b-xl bg-black/60 px-1 py-0.5 group-hover:block">
+                    <span className="block truncate text-[10px] text-white">{attachment.file.name}</span>
+                  </div>
+                  {attachment.uploading ? (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="size-4 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-foreground" />
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => removeAttachment(attachment.id)}
+                      className="absolute -top-1.5 -right-1.5 hidden size-4.5 items-center justify-center rounded-full bg-background/90 text-muted-foreground backdrop-blur-sm transition-colors hover:bg-red-500 hover:text-white group-hover:flex"
+                      aria-label={`Remove ${attachment.file.name}`}
+                    >
+                      <HiXMark className="size-3" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : null}
 
           <div className="relative space-y-3 rounded-xl border border-border/70 bg-background/60 p-3">
             <Button
@@ -2390,6 +2591,14 @@ export default function ProjectWorkspacePage() {
                 ))}
               </div>
             ) : null}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/jpg,image/gif,image/webp"
+              multiple
+              className="hidden"
+              onChange={(event) => handleAttachFiles(event.target.files)}
+            />
             <textarea
               ref={chatInputRef}
               value={chatInput}
@@ -2471,15 +2680,32 @@ export default function ProjectWorkspacePage() {
               </div>
             ) : null}
             <div className="flex items-center justify-between gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                onClick={() => setRunMode((current) => (current === "build" ? "plan" : "build"))}
-                aria-label={runMode === "build" ? "Switch to plan mode" : "Switch to build mode"}
-              >
-                {runMode === "build" ? "Build" : "Plan"}
-              </Button>
+              <div className="flex items-center gap-1">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setRunMode((current) => (current === "build" ? "plan" : "build"))}
+                  aria-label={runMode === "build" ? "Switch to plan mode" : "Switch to build mode"}
+                >
+                  {runMode === "build" ? "Build" : "Plan"}
+                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="secondary"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={isRunning}
+                      aria-label="Attach images"
+                    >
+                      <HiPaperClip className="size-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">Attach images</TooltipContent>
+                </Tooltip>
+              </div>
               <Tooltip>
                 <TooltipTrigger asChild>
                   {isRunning ? (

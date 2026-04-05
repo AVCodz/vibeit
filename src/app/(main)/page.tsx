@@ -1,11 +1,11 @@
 "use client";
 
 import { useLogger } from "@logtail/next/hooks";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { DottedSurface } from "@/components/ui/dotted-surface";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { HiPaperAirplane, HiPaperClip, HiSparkles } from "react-icons/hi2";
+import { HiPaperAirplane, HiPaperClip, HiSparkles, HiXMark } from "react-icons/hi2";
 import { useRouter } from "next/navigation";
 import { useSession } from "@/lib/auth-client";
 
@@ -21,7 +21,9 @@ export default function Home() {
   const [promptValue, setPromptValue] = useState("");
   const [isBootstrapping, setIsBootstrapping] = useState(false);
   const [isEnhancing, setIsEnhancing] = useState(false);
+  const [pendingImages, setPendingImages] = useState<Array<{ id: string; file: File; previewUrl: string }>>([]);
   const hasNavigatedRef = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const { data: session } = useSession();
   const log = useLogger({ source: "app/(main)/page.tsx" });
@@ -66,6 +68,37 @@ export default function Home() {
     return () => clearTimeout(timeout);
   }, [displayedText, isDeleting, promptIndex]);
 
+  const handleAttachFiles = useCallback((files: FileList | null) => {
+    if (!files || files.length === 0) return;
+
+    const newImages: typeof pendingImages = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!file || !file.type.startsWith("image/") || file.size > 5 * 1024 * 1024) continue;
+
+      newImages.push({
+        id: crypto.randomUUID(),
+        file,
+        previewUrl: URL.createObjectURL(file),
+      });
+    }
+
+    setPendingImages((current) => [...current, ...newImages].slice(0, 30));
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }, []);
+
+  const removeImage = useCallback((imageId: string) => {
+    setPendingImages((current) => {
+      const removed = current.find((img) => img.id === imageId);
+      if (removed) URL.revokeObjectURL(removed.previewUrl);
+      return current.filter((img) => img.id !== imageId);
+    });
+  }, []);
+
   const handleSend = async () => {
     const prompt = promptValue.trim();
 
@@ -106,6 +139,36 @@ export default function Home() {
         throw new Error(data.error ?? "Unable to bootstrap project");
       }
 
+      // Upload images to the new project if any are attached
+      const attachmentIds: string[] = [];
+
+      if (pendingImages.length > 0) {
+        for (const img of pendingImages) {
+          const formData = new FormData();
+          formData.append("file", img.file);
+
+          const uploadResponse = await fetch(
+            `/api/projects/${data.projectId}/attachments/upload`,
+            { method: "POST", body: formData },
+          );
+
+          const uploadData = (await uploadResponse.json()) as {
+            attachmentId?: string;
+            error?: string;
+          };
+
+          if (uploadResponse.ok && uploadData.attachmentId) {
+            attachmentIds.push(uploadData.attachmentId);
+          }
+        }
+
+        // Clean up preview URLs
+        for (const img of pendingImages) {
+          URL.revokeObjectURL(img.previewUrl);
+        }
+        setPendingImages([]);
+      }
+
       const url = new URL(`/projects/${data.projectId}`, window.location.origin);
       if (data.previewUrl) {
         url.searchParams.set("preview", data.previewUrl);
@@ -119,6 +182,9 @@ export default function Home() {
       }
       if (data.initialAssistantMessage?.id) {
         url.searchParams.set("amid", data.initialAssistantMessage.id);
+      }
+      if (attachmentIds.length > 0) {
+        url.searchParams.set("attachments", attachmentIds.join(","));
       }
       url.searchParams.set("autostart", "1");
 
@@ -194,6 +260,30 @@ export default function Home() {
       </div>
 
       <div className="animate-fade-up mt-10 w-full max-w-3xl mb-16 opacity-0 [animation-delay:800ms]">
+        {pendingImages.length > 0 ? (
+          <div className="mb-3 flex flex-wrap gap-2">
+            {pendingImages.map((img) => (
+              <div key={img.id} className="group relative">
+                <img
+                  src={img.previewUrl}
+                  alt={img.file.name}
+                  className="size-16 rounded-xl border border-border/40 object-cover"
+                />
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 hidden rounded-b-xl bg-black/60 px-1.5 py-0.5 group-hover:block">
+                  <span className="block truncate text-[10px] text-white">{img.file.name}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeImage(img.id)}
+                  className="absolute cursor-pointer -top-1.5 -right-1.5 hidden size-4.5 items-center justify-center rounded-full bg-background/90 text-muted-foreground backdrop-blur-sm transition-colors hover:bg-red-500 hover:text-white group-hover:flex"
+                  aria-label={`Remove ${img.file.name}`}
+                >
+                  <HiXMark className="size-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
         <div className="relative rounded-2xl border border-border/50 bg-card p-5">
           {session?.user ? (
             <Tooltip>
@@ -239,11 +329,30 @@ export default function Home() {
               }
             }}
           />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/jpg,image/gif,image/webp"
+            multiple
+            className="hidden"
+            onChange={(event) => handleAttachFiles(event.target.files)}
+          />
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1">
-              <Button variant="secondary" size="icon-sm" type="button">
-                <HiPaperClip className="size-4" />
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="secondary"
+                    size="icon-sm"
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    aria-label="Attach images"
+                  >
+                    <HiPaperClip className="size-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top">Attach images</TooltipContent>
+              </Tooltip>
             </div>
             <button
               type="button"
@@ -252,7 +361,7 @@ export default function Home() {
               className="flex size-8 cursor-pointer items-center justify-center rounded-lg bg-foreground/10 text-muted-foreground transition-all duration-150 hover:bg-foreground/20 hover:text-foreground active:scale-95 disabled:pointer-events-none disabled:opacity-30"
               aria-label="Send message"
             >
-              <HiPaperAirplane className="size-4 -rotate-45" />
+              <HiPaperAirplane className="size-4" />
             </button>
           </div>
         </div>
