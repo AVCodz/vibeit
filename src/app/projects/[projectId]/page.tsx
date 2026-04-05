@@ -111,6 +111,8 @@ const PROJECT_UI_CACHE_VERSION = 1;
 const PROJECT_UI_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
 
 const FILE_WRITE_VERBS = ["write", "edit", "create", "update", "overwrite", "patch", "save"];
+const FILE_TREE_POLL_INTERVAL_MS = 3000;
+const FILE_CONTENT_POLL_INTERVAL_MS = 2500;
 const TERMINAL_DEFAULT_HEIGHT = 360;
 const TERMINAL_MIN_HEIGHT = 180;
 const TERMINAL_AUTO_CLOSE_HEIGHT = 120;
@@ -285,6 +287,40 @@ function removeMentionFromPrompt(value: string, path: string) {
   const escaped = escapeRegExp(path);
   const withoutMention = value.replace(new RegExp(`(^|\\s)@${escaped}(?=\\s|$)`, "g"), (match, leadingWhitespace: string) => leadingWhitespace || "");
   return withoutMention.replace(/[ \t]{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function mergeWorkspaceFiles(currentFiles: WorkspaceFile[], incomingFiles: WorkspaceFile[]) {
+  const currentByPath = new Map(currentFiles.map((file) => [file.path, file]));
+  let changed = currentFiles.length !== incomingFiles.length;
+
+  const nextFiles = incomingFiles.map((incoming) => {
+    const existing = currentByPath.get(incoming.path);
+
+    if (!existing) {
+      changed = true;
+      return incoming;
+    }
+
+    const nextContent = incoming.content ?? existing.content;
+    const sameFile =
+      existing.isDir === incoming.isDir &&
+      existing.language === incoming.language &&
+      existing.content === nextContent;
+
+    if (sameFile) {
+      return existing;
+    }
+
+    changed = true;
+    return {
+      ...existing,
+      isDir: incoming.isDir,
+      language: incoming.language,
+      content: nextContent,
+    };
+  });
+
+  return changed ? nextFiles : currentFiles;
 }
 
 function deriveToolPhase(toolName: string, input: unknown): AgentPhase {
@@ -627,6 +663,7 @@ export default function ProjectWorkspacePage() {
   const log = useLogger({ source: "app/projects/[projectId]/page.tsx" });
 
   const selectedFile = useMemo(() => files.find((file) => file.path === selectedFilePath), [files, selectedFilePath]);
+  const selectedFileContent = useMemo(() => selectedFile?.content ?? "", [selectedFile?.content]);
   const fileTree = useMemo(() => buildFileTree(files), [files]);
   const availableMentionPaths = useMemo(
     () => files.filter((file) => !file.isDir).map((file) => file.path),
@@ -1097,7 +1134,7 @@ export default function ProjectWorkspacePage() {
         return a.path.localeCompare(b.path);
       });
 
-    setFiles(mapped);
+    setFiles((currentFiles) => mergeWorkspaceFiles(currentFiles, mapped));
 
     const currentPath = selectedFilePathRef.current;
     if (!currentPath || !mapped.some((file) => !file.isDir && file.path === currentPath)) {
@@ -1109,7 +1146,7 @@ export default function ProjectWorkspacePage() {
   }, [projectId]);
 
   const loadFileContent = useCallback(
-    async (path: string) => {
+    async (path: string, options?: { force?: boolean; silent?: boolean }) => {
       if (!projectId) {
         return;
       }
@@ -1117,13 +1154,13 @@ export default function ProjectWorkspacePage() {
       const cache = readCache(projectId);
       const cached = cache[path];
 
-      if (cached) {
+      if (cached && !options?.force) {
         setFiles((current) =>
           current.map((file) =>
             file.path === path ? { ...file, content: cached.content } : file,
           ),
         );
-      } else {
+      } else if (!options?.silent) {
         setIsFileContentLoading(true);
       }
 
@@ -1152,7 +1189,9 @@ export default function ProjectWorkspacePage() {
 
         writeCacheEntry(projectId, path, data.content);
       } finally {
-        setIsFileContentLoading(false);
+        if (!options?.silent) {
+          setIsFileContentLoading(false);
+        }
       }
     },
     [projectId],
@@ -2159,6 +2198,36 @@ export default function ProjectWorkspacePage() {
     });
   }, [loadFileContent, selectedFile]);
 
+  useEffect(() => {
+    if (!projectId || !isWorkspaceReady || activeTab !== "files") {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void loadFiles().catch(() => undefined);
+    }, FILE_TREE_POLL_INTERVAL_MS);
+
+    return () => window.clearInterval(interval);
+  }, [activeTab, isWorkspaceReady, loadFiles, projectId]);
+
+  useEffect(() => {
+    if (
+      !projectId ||
+      !isWorkspaceReady ||
+      activeTab !== "files" ||
+      !selectedFile ||
+      selectedFile.isDir
+    ) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void loadFileContent(selectedFile.path, { force: true, silent: true }).catch(() => undefined);
+    }, FILE_CONTENT_POLL_INTERVAL_MS);
+
+    return () => window.clearInterval(interval);
+  }, [activeTab, isWorkspaceReady, loadFileContent, projectId, selectedFile]);
+
 
 
   const scrollChatToBottom = useCallback(() => {
@@ -2969,8 +3038,9 @@ export default function ProjectWorkspacePage() {
                   )}
                   <Editor
                     height="100%"
+                    path={selectedFile?.path ?? "__empty__.tsx"}
                     language={selectedFile?.language ?? "typescript"}
-                    value={selectedFile?.content ?? ""}
+                    value={selectedFileContent}
                     theme="vs-dark"
                     options={{
                       readOnly: true,

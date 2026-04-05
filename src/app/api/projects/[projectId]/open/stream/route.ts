@@ -34,6 +34,10 @@ function sseEvent(event: string, data: unknown) {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
+function isClosedStreamControllerError(error: unknown) {
+  return error instanceof TypeError && error.message.includes("Controller is already closed");
+}
+
 export const POST = withBetterStack(async (
   request: BetterStackRequest,
   context: { params: Promise<{ projectId: string }> },
@@ -60,45 +64,87 @@ export const POST = withBetterStack(async (
   }
 
   const encoder = new TextEncoder();
+  let streamClosed = request.signal.aborted;
+  let removeAbortListener: (() => void) | null = null;
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      const close = () => {
+        if (streamClosed) {
+          return;
+        }
+
+        streamClosed = true;
+
+        try {
+          controller.close();
+        } catch (error) {
+          if (!isClosedStreamControllerError(error)) {
+            throw error;
+          }
+        }
+      };
+
       const push = (event: string, data: unknown) => {
-        controller.enqueue(encoder.encode(sseEvent(event, data)));
+        if (streamClosed) {
+          return;
+        }
+
+        try {
+          controller.enqueue(encoder.encode(sseEvent(event, data)));
+        } catch (error) {
+          if (isClosedStreamControllerError(error)) {
+            streamClosed = true;
+            return;
+          }
+
+          throw error;
+        }
+      };
+
+      const handleAbort = () => {
+        streamClosed = true;
+      };
+
+      request.signal.addEventListener("abort", handleAbort, { once: true });
+      removeAbortListener = () => {
+        request.signal.removeEventListener("abort", handleAbort);
       };
 
       void (async () => {
-        push("open.started", {
-          projectId: project.id,
-          projectName: project.name,
-        });
-
-        const projectDescription = project.description?.trim();
-
-        const renamePromise =
-          project.name === "New Project" && projectDescription
-            ? (async () => {
-                const generatedName = await generateProjectNameFromPrompt(projectDescription);
-                if (!generatedName || generatedName === "New Project") {
-                  return;
-                }
-
-                const renamedResult = await query<{ name: string }>(
-                  "update projects set name = $1, updated_at = $2 where id = $3 and name = $4 returning name",
-                  [generatedName, new Date(), project.id, "New Project"],
-                );
-
-                const renamedProject = renamedResult.rows[0];
-                if (renamedProject?.name) {
-                  push("project.renamed", {
-                    projectId: project.id,
-                    name: renamedProject.name,
-                  });
-                }
-              })().catch(() => undefined)
-            : Promise.resolve();
+        let renamePromise: Promise<void> = Promise.resolve();
 
         try {
+          push("open.started", {
+            projectId: project.id,
+            projectName: project.name,
+          });
+
+          const projectDescription = project.description?.trim();
+
+          renamePromise =
+            project.name === "New Project" && projectDescription
+              ? (async () => {
+                  const generatedName = await generateProjectNameFromPrompt(projectDescription);
+                  if (!generatedName || generatedName === "New Project") {
+                    return;
+                  }
+
+                  const renamedResult = await query<{ name: string }>(
+                    "update projects set name = $1, updated_at = $2 where id = $3 and name = $4 returning name",
+                    [generatedName, new Date(), project.id, "New Project"],
+                  );
+
+                  const renamedProject = renamedResult.rows[0];
+                  if (renamedProject?.name) {
+                    push("project.renamed", {
+                      projectId: project.id,
+                      name: renamedProject.name,
+                    });
+                  }
+                })().catch(() => undefined)
+              : Promise.resolve();
+
           const pendingInitialRunResult = await query<{ has_pending: boolean }>(
             `select exists(
               select 1
@@ -189,7 +235,7 @@ export const POST = withBetterStack(async (
               });
 
               await renamePromise;
-              controller.close();
+              close();
               return;
             }
           }
@@ -301,7 +347,7 @@ export const POST = withBetterStack(async (
           });
 
           await renamePromise;
-          controller.close();
+          close();
         } catch (error) {
           log.error("Streaming open failed", {
             projectId: project.id,
@@ -320,9 +366,17 @@ export const POST = withBetterStack(async (
             error: error instanceof Error ? error.message : "Failed to open project",
           });
 
-          controller.close();
+          close();
+        } finally {
+          removeAbortListener?.();
+          removeAbortListener = null;
         }
       })();
+    },
+    cancel() {
+      streamClosed = true;
+      removeAbortListener?.();
+      removeAbortListener = null;
     },
   });
 
