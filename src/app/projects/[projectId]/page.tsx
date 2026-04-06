@@ -2017,18 +2017,13 @@ export default function ProjectWorkspacePage() {
         }
 
         if (stateData.hasActiveSession) {
-          if (stateData.previewUrl) {
-            setIsOpening(false);
-            setActivity("Project ready");
-            return;
-          }
-
+          setIsOpening(true);
           setActivity("Reconnecting workspace...");
+        } else {
+          setIsOpening(true);
+          setIsWorkspaceReady(false);
+          setActivity("Preparing your workspace...");
         }
-
-        setIsOpening(true);
-        setIsWorkspaceReady(false);
-        setActivity("Preparing your workspace...");
 
         const response = await fetch(`/api/projects/${projectId}/open/stream`, {
           method: "POST",
